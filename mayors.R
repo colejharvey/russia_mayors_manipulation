@@ -171,6 +171,8 @@ for(i in 1:nrow(match.set)){
   match.targets <- as.character(match.set$match.target[i])
   sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
   sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
+  territory.list <- str_split_fixed(sub.iteration$territory, boundary("word"), n =2)  #Creates a fixed-column-number dataframe
+  sub.iteration <- sub.iteration %>% mutate(territory.id = territory.list[,1])
   if ((nrow(sub.iteration) == 0)){
     print("Error, no observations")
     break
@@ -182,20 +184,20 @@ for(i in 1:nrow(match.set)){
 
 data.container <- as_tibble(data.container)
 data.container <- data.container %>% mutate(treatment.group = 0)
-data.container <- data.container %>% mutate(treatment.treated = 0)
+data.container <- data.container %>% mutate(post.treatment = 0)
 
 write.csv(data.container, "control group 2004 pre-treatment.csv")
 
 ###Testing that those regions with multiple targets work
 ###
-sub.iteration <- sub2004 %>% filter(regionid == 88) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
-match.targets <- as.character(match.set$match.target[42])
+#sub.iteration <- sub2004 %>% filter(regionid == 88) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
+#match.targets <- as.character(match.set$match.target[42])
 #str_view(sub.iteration$territory, match.targets, match=TRUE)
-districts <- unique(sub.iteration$territory) #For troubleshooting
+#districts <- unique(sub.iteration$territory) #For troubleshooting
 
-sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
-sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
-unique(sub.iteration$territory)
+#sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
+#sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
+#unique(sub.iteration$territory)
 
 ###
 ###2012 election for treatment group
@@ -222,6 +224,8 @@ for(i in 1:nrow(match.set)){
   match.targets <- as.character(match.set$match.target[i])
   sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
   sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
+  territory.list <- str_split_fixed(sub.iteration$territory, boundary("word"), n =2)  #Creates a fixed-column-number dataframe
+  sub.iteration <- sub.iteration %>% mutate(territory.id = territory.list[,1])
   if ((nrow(sub.iteration) == 0)){
     print("Error, no observations")
     break
@@ -233,7 +237,7 @@ for(i in 1:nrow(match.set)){
 
 data.container <- as_tibble(data.container)
 data.container <- data.container %>% mutate(treatment.group = 0)
-data.container <- data.container %>% mutate(treatment.treated = 1)
+data.container <- data.container %>% mutate(post.treatment = 1)
 
 write.csv(data.container, "control group 2012 post-treatment.csv")
 
@@ -243,7 +247,7 @@ write.csv(data.container, "control group 2012 post-treatment.csv")
 data2004 <- as_tibble(read.csv("control group 2004 pre-treatment.csv"))
 data2012 <- as_tibble(read.csv("control group 2012 post-treatment.csv"))
 
-data2004.small <- select(data2004, regionid, territory, treatment.group, treatment.treated, Number.of.voters.included.in.the.list,
+data2004.small <- select(data2004, regionid, territory, territory.id, treatment.group, post.treatment, Number.of.voters.included.in.the.list,
                          Number.of.invalid.ballots, Number.of.valid.ballots, Number.of.ballots.in.mobile.ballot.boxes,
                          Number.of.voters.voting.by.absentee, Number.of.absentee.ballots.received,
                          Putin)
@@ -256,7 +260,7 @@ data2004.small <- data2004.small %>% rename(voter.list = Number.of.voters.includ
                                             absentee.received = Number.of.absentee.ballots.received,
                                             putin = Putin)
 
-data2012.small <- select(data2012, regionid, territory, treatment.group, treatment.treated,
+data2012.small <- select(data2012, regionid, territory, territory.id, treatment.group, post.treatment,
                          number.of.voters.on.list, invalid, valid, number.in.mobile.ballot.box,
                          number.of.absentee.voters, absentee, putin)
 
@@ -281,24 +285,68 @@ mayors.data <- rbind(control.data, treatment.data)
 
 write.csv(mayors.data, "all local results.csv")
 
-###Quick test model
-mayors.data <- read.csv("all local results.csv")
-mayors.data <- mayors.data %>% select(-X, -X.Intercept., - nonstandard.coef)
+###Getting nonstandard.coefs for each election
+
+sub2004 <- mayors.data %>% filter(post.treatment == 0)
 library(lme4)
-model.test <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | territory),
-                 data=mayors.data, REML=FALSE)
-summary(model.test)
+model.test <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | territory.id),
+                   data=sub2004, REML=FALSE)
 coefs.test <- coef(model.test)
-coefs.territory <- as_tibble(coefs.test$territory, rownames = 'territory')
+coefs.territory0 <- as_tibble(coefs.test$territory.id, rownames = 'territory.id') %>% mutate(
+     post.treatment = 0)
+coefs.territory0 <- mutate(coefs.territory0,
+                           regionid = NA)
 
-mayors.data <- coefs.territory %>% select(1:3) %>% right_join(mayors.data, by = "territory")
-mayors.data <- rename(mayors.data, nonstandard.coef = pct.nonstandard.y,
-                    pct.nonstandard = pct.nonstandard.x)
+j <- 1
+for(j in 1:nrow(coefs.territory0)){
+  sub.territory.04 <- subset(sub2004, sub2004$territory.id == coefs.territory0$territory.id[j])
+  coefs.territory0$regionid[j] <- sub.territory.04$regionid[1]
+}
 
-write.csv(mayors.data, "all local results.csv")
+write.csv(coefs.territory0, "pre-treatment coefs by territory.csv")
 
-###Test DiD
+ ###
 
-didmodel <- lm(nonstandard.coef ~ treatment.group + treatment.treated +
-                 treatment.group*treatment.treated, data=mayors.data)
+sub2012 <- mayors.data %>% filter(post.treatment.y == 1)
+j <- 1
+for(i in 1:length(unique(sub2004$territory.id))){
+  sub.territory.12 <- subset
+}
+
+library(lme4)
+model.test <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | territory.id),
+                   data=sub2012, REML=FALSE)
+coefs.test <- coef(model.test)
+coefs.territory1 <- as_tibble(coefs.test$territory.id, rownames = 'territory.id') %>% mutate(
+  post.treatment = 1)
+
+coefs.territory1 <- mutate(coefs.territory1,
+                           regionid = NA)
+
+j <- 1
+for(j in 1:nrow(coefs.territory1)){
+  sub.territory.12 <- subset(sub2012, sub2012$territory.id == coefs.territory1$territory.id[j])
+  coefs.territory1$regionid[j] <- sub.territory.12$regionid[1]
+}
+
+write.csv(coefs.territory1, "post-treatment coefs by territory.csv")
+
+coefs.all <- rbind(coefs.territory0, coefs.territory1)
+coefs.all <- coefs.all %>% mutate(treatment.group = 0) 
+
+write.csv(coefs.all, "all coefs by territory.csv")
+
+###Merging coefs by territory with precinct-level dataset
+mayors.data <- read.csv("all local results.csv")
+
+mayors.data <- mayors.data %>% left_join(coefs.all, by = "territory.id")
+
+###Quick test models
+coefs.all <- read.csv("all coefs by territory with covariates.csv") #This version has the covariates
+
+didmodel <- lm(pct.nonstandard ~ treatment.group + post.treatment +
+                 treatment.group*post.treatment, data=coefs.all)
 summary(didmodel)
+
+
+
