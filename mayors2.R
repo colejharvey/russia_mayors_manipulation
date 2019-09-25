@@ -323,5 +323,10 @@ didmodel <- lm(pct.nonstandard ~ treatment.group + post.treatment +
                  treatment.group*post.treatment, data=coefs.all)
 summary(didmodel)
 
+####Getting Reuter et al data
+library(foreign)
+
+###Reading in Reuter et al data
+reuter.data <- read.dta("reuter_et_al_data.dta") #Next step is to conver their regionids to mine
 
 

@@ -2,6 +2,10 @@ library(readxl)
 library(tidyverse)
 library(stringi)
 library(stringr)
+library(foreign)
+
+###Reading in Reuter et al data
+reuter.data <- read.dta("reuter_et_al_data.dta")
 
 ###Treatment group
 
