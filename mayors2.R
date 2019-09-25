@@ -327,6 +327,54 @@ summary(didmodel)
 library(foreign)
 
 ###Reading in Reuter et al data
-reuter.data <- read.dta("reuter_et_al_data.dta") #Next step is to conver their regionids to mine
+reuter.data <- as_tibble(read.dta("reuter_et_al_data.dta")) #Next step is to conver their regionids to mine
+reuter.data.small <- reuter.data %>% filter(year == 2004 | year == 2012)  %>%
+  mutate(regionid.reuter = regionid)
 
+ ###Getting treatment covariates
+match.set <- read_excel("match-targets.xlsx") #Treatment cities
+data.container <- reuter.data.small %>% filter(regionid==99)   ##99 doesn't exit, so creates an empty tibble with correct columns
 
+i<-1
+
+for(i in 1:nrow(match.set)){
+  #sub.iteration <- reuter.data.small %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
+  match.targets <- as.character(match.set$reuter.name[i])
+  reuter.data.small <- reuter.data.small %>% mutate(match.tf = (is.na(str_extract(reuter.data.small$PositionCity, match.targets))==FALSE))
+  sub.iteration <- reuter.data.small %>% filter(match.tf == TRUE) %>% 
+    mutate(regionid = match.set$regionid[i])
+   if ((nrow(sub.iteration) == 0)){
+    print("Error, no observations")
+    break
+  }
+  data.container <- rbind(data.container, sub.iteration)
+}
+
+write.csv(data.container, "treatment city covariates.csv")
+
+ ###Getting control covariates
+
+match.set <- read_excel("match-targets-control.xlsx") #Treatment cities
+data.container <- reuter.data.small %>% filter(regionid==99)   ##99 doesn't exit, so creates an empty tibble with correct columns
+
+i<-1
+
+for(i in 1:nrow(match.set)){
+  #sub.iteration <- reuter.data.small %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
+  match.targets <- as.character(match.set$reuter.name[i])
+  reuter.data.small <- reuter.data.small %>% mutate(match.tf = (is.na(str_extract(reuter.data.small$PositionCity, match.targets))==FALSE))
+  sub.iteration <- reuter.data.small %>% filter(match.tf == TRUE) %>% 
+    mutate(regionid = match.set$regionid[i])
+  if ((nrow(sub.iteration) == 0)){
+    print("Error, no observations")
+    break
+  }
+  data.container <- rbind(data.container, sub.iteration)
+}
+
+write.csv(data.container, "control city covariates.csv")
+
+###These covariate files have my regionids plus reuter's city names
+###So to connect to cities' coefs, we will also need to get territory.id
+###in these spreadsheets so they can be merged with the coef files.
+###coef files will also need a year variable
