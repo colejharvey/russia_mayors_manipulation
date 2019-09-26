@@ -1,3 +1,6 @@
+###This version uses city_id from Reuter et al as the key
+
+
 ###Next thing to consider here is adding socioeconomic controls into the bottom-level
 ###model that generates the coefficients
 ###Also include number of districts within each city as a covariate
@@ -23,18 +26,22 @@ sub2004 <- read_excel("2004 presidential election full.xlsx") %>% semi_join(trea
 
 treatment.ids <- arrange(treatment.ids, regionid)
 
-data.container <- sub2004 %>% filter(regionid==99)  ##99 doesn't exit, so creates an empty tibble with correct columns
+data.container <- sub2004 %>% filter(regionid==99) %>%
+  mutate(city_id = NA)##99 doesn't exit, so creates an empty tibble with correct columns
 
 i<-1
 
 for(i in 1:nrow(match.set)){
   sub.iteration <- sub2004 %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
   match.targets <- as.character(match.set$match.target[i])
+  city_id.temp <- match.set$city_id[i]
   sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
   sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
   sub.iteration <- sub.iteration %>% mutate(match.target = as.character(match.set$match.target[i]))
   territory.list <- str_split_fixed(sub.iteration$territory, boundary("word"), n =2)  #Creates a fixed-column-number dataframe
   sub.iteration <- sub.iteration %>% mutate(territory.id = territory.list[,1])
+  sub.iteration <- sub.iteration %>% mutate(city_id = city_id.temp)
+
   if ((nrow(sub.iteration) == 0)){
     print("Error, no observations")
     break
@@ -42,7 +49,7 @@ for(i in 1:nrow(match.set)){
   data.container <- rbind(data.container, sub.iteration)
 }
 
- ###Generating new variables
+###Generating new variables
 data.container <- data.container %>% rename(voter.list = "Number of voters included in the list",
                                             invalid = "Number of invalid ballots",
                                             valid = "Number of valid ballots",
@@ -57,48 +64,21 @@ data.container <- data.container %>% mutate(putin.abshare = putin/voter.list)
 
 
 
- ###Generating nonstandard vote coefficients
+###Generating nonstandard vote coefficients
 
 library(lme4)
-model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | territory.id),
-                   data=data.container, REML=FALSE)
+model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | city_id),
+                    data=data.container, REML=FALSE)
 coefs.test <- coef(model.coefs)
-coefs.tg.pretreat <- as_tibble(coefs.test$territory.id, rownames = 'territory.id') %>%
-    mutate(treatment.group = 1, post.treatment = 0)
+coefs.tg.pretreat <- as_tibble(coefs.test$city_id, rownames = 'city_id') %>%
+  mutate(treatment.group = 1, post.treatment = 0)
 
-coefs.tg.pretreat$regionid <- NA
+coefs.tg.pretreat$year <- 2004
 
-j <- 1
-for(j in 1:nrow(coefs.tg.pretreat)){
-  territory.name <- coefs.tg.pretreat$territory.id[j]
-  data.container <- data.container %>% mutate(match.tf = (is.na(str_extract(data.container$territory.id, territory.name))==FALSE))
-  region.subset <- data.container %>% filter(match.tf == TRUE)
-  regionid.temp <- region.subset$regionid[1]
-  coefs.tg.pretreat$regionid[j] <- regionid.temp 
-}
-
-###DO NOT OVERWRITE THE FILE BELOW
-###USE TEMP FILE AND COPY-PASTE TO PERMANENT FILE INSTEAD
-###write.csv(coefs.tg.pretreat, "coefs treatment group 2004 pre-treatment.csv")
-write.csv(coefs.tg.pretreat, "coefs treatment group 2004 pre-treatment_TEMP.csv")
+write.csv(coefs.tg.pretreat, "coefs treatment group 2004 pre-treatment w city_id.csv")
 
 
-
-###Testing that those regions with multiple targets work
-###
-#sub.iteration <- sub2004 %>% filter(regionid == 75) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
-#match.targets <- as.character(match.set$match.target[37])
-#str_view(sub.iteration$territory, match.targets, match=TRUE)
-#districts <- unique(sub.iteration$territory) #For troubleshooting
-
-#sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
-#sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
-#unique(sub.iteration$territory)
-
-###
-###2012 election for treatment group
-###
-
+####Treatment group 2012
 ids <- read.csv("russia region ids.csv")
 match.set <- read_excel("match-targets.xlsx")
 
@@ -112,18 +92,22 @@ sub2012 <- read_excel("russia 2012 presidential election full.xlsx") %>% semi_jo
 
 treatment.ids <- arrange(treatment.ids, regionid)
 
-data.container <- sub2012 %>% filter(regionid==99)  ##99 doesn't exit, so creates an empty tibble with correct columns
+data.container <- sub2012 %>% filter(regionid==99) %>%
+  mutate(city_id = NA)##99 doesn't exit, so creates an empty tibble with correct columns
 
 i<-1
 
 for(i in 1:nrow(match.set)){
   sub.iteration <- sub2012 %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom2, 'latin'))
   match.targets <- as.character(match.set$match.target[i])
+  city_id.temp <- match.set$city_id[i]
   sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
   sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
   sub.iteration <- sub.iteration %>% mutate(match.target = as.character(match.set$match.target[i]))
   territory.list <- str_split_fixed(sub.iteration$territory, boundary("word"), n =2)  #Creates a fixed-column-number dataframe
   sub.iteration <- sub.iteration %>% mutate(territory.id = territory.list[,1])
+  sub.iteration <- sub.iteration %>% mutate(city_id = city_id.temp)
+  
   if ((nrow(sub.iteration) == 0)){
     print("Error, no observations")
     break
@@ -144,27 +128,15 @@ data.container <- data.container %>% mutate(putin.abshare = putin/voter.list)
 ###Generating nonstandard vote coefficients
 
 library(lme4)
-model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | territory.id),
+model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | city_id),
                     data=data.container, REML=FALSE)
 coefs.test <- coef(model.coefs)
-coefs.tg.postreat <- as_tibble(coefs.test$territory.id, rownames = 'territory.id') %>%
+coefs.tg.postreat <- as_tibble(coefs.test$city_id, rownames = 'city_id') %>%
   mutate(treatment.group = 1, post.treatment = 1)
 
-coefs.tg.postreat$regionid <- NA
+coefs.tg.postreat$year <- 2012
 
-j <- 1
-for(j in 1:nrow(coefs.tg.postreat)){
-  territory.name <- coefs.tg.postreat$territory.id[j]
-  data.container <- data.container %>% mutate(match.tf = (is.na(str_extract(data.container$territory.id, territory.name))==FALSE))
-  region.subset <- data.container %>% filter(match.tf == TRUE)
-  regionid.temp <- region.subset$regionid[1]
-  coefs.tg.postreat$regionid[j] <- regionid.temp 
-}
-
-###DO NOT OVERWRITE THE FILE BELOW
-###USE TEMP FILE AND COPY-PASTE TO PERMANENT FILE INSTEAD
-#write.csv(coefs.tg.postreat, "coefs treatment group 2012 post-treatment.csv")
-write.csv(coefs.tg.postreat, "coefs treatment group 2012 post-treatment_TEMP.csv")
+write.csv(coefs.tg.postreat, "coefs treatment group 2012 post-treatment w city_id.csv")
 
 
 
@@ -185,17 +157,21 @@ sub2004 <- read_excel("2004 presidential election full.xlsx") %>% semi_join(trea
 
 treatment.ids <- arrange(treatment.ids, regionid)
 
-data.container <- sub2004 %>% filter(regionid==99)  ##99 doesn't exit, so creates an empty tibble with correct columns
+data.container <- sub2004 %>% filter(regionid==99) %>%
+  mutate(city_id = NA)##99 doesn't exit, so creates an empty tibble with correct columns
 
 i<-1
 
 for(i in 1:nrow(match.set)){
   sub.iteration <- sub2004 %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
   match.targets <- as.character(match.set$match.target[i])
+  city_id.temp <- match.set$city_id[i]
   sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
   sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
   territory.list <- str_split_fixed(sub.iteration$territory, boundary("word"), n =2)  #Creates a fixed-column-number dataframe
   sub.iteration <- sub.iteration %>% mutate(territory.id = territory.list[,1])
+  sub.iteration <- sub.iteration %>% mutate(city_id = city_id.temp)
+  
   if ((nrow(sub.iteration) == 0)){
     print("Error, no observations")
     break
@@ -221,26 +197,15 @@ data.container <- data.container %>% mutate(putin.abshare = putin/voter.list)
 
 ###Generating nonstandard vote coefficients
 
-model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | territory.id),
+model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | city_id),
                     data=data.container, REML=FALSE)
 coefs.test <- coef(model.coefs)
-coefs.cg.pretreat <- as_tibble(coefs.test$territory.id, rownames = 'territory.id') %>%
+coefs.cg.pretreat <- as_tibble(coefs.test$city_id, rownames = 'city_id') %>%
   mutate(treatment.group = 0, post.treatment = 0)
 
-coefs.cg.pretreat$regionid <- NA
+coefs.cg.pretreat$year <- 2004
 
-j <- 1
-for(j in 1:nrow(coefs.cg.pretreat)){
-  territory.name <- coefs.cg.pretreat$territory.id[j]
-  data.container <- data.container %>% mutate(match.tf = (is.na(str_extract(data.container$territory.id, territory.name))==FALSE))
-  region.subset <- data.container %>% filter(match.tf == TRUE)
-  regionid.temp <- region.subset$regionid[1]
-  coefs.cg.pretreat$regionid[j] <- regionid.temp 
-}
-
-
-write.csv(coefs.cg.pretreat, "coefs control group 2004 pre-treatment.csv")
-
+write.csv(coefs.cg.pretreat, "coefs control group 2004 pre-treatment w city_id.csv")
 
 
 ###
@@ -259,17 +224,21 @@ sub2012 <- read_excel("russia 2012 presidential election full.xlsx") %>% semi_jo
 
 treatment.ids <- arrange(treatment.ids, regionid)
 
-data.container <- sub2012 %>% filter(regionid==99)  ##99 doesn't exit, so creates an empty tibble with correct columns
+data.container <- sub2012 %>% filter(regionid==99) %>%
+  mutate(city_id = NA)##99 doesn't exit, so creates an empty tibble with correct columns
 
 i<-1
 
 for(i in 1:nrow(match.set)){
   sub.iteration <- sub2012 %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom2, 'latin'))
   match.targets <- as.character(match.set$match.target[i])
+  city_id.temp <- match.set$city_id[i]
   sub.iteration <- sub.iteration %>% mutate(match.tf = (is.na(str_extract(sub.iteration$territory, match.targets))==FALSE))
   sub.iteration <- sub.iteration %>% filter(match.tf == TRUE)
   territory.list <- str_split_fixed(sub.iteration$territory, boundary("word"), n =2)  #Creates a fixed-column-number dataframe
   sub.iteration <- sub.iteration %>% mutate(territory.id = territory.list[,1])
+  sub.iteration <- sub.iteration %>% mutate(city_id = city_id.temp)
+  
   if ((nrow(sub.iteration) == 0)){
     print("Error, no observations")
     break
@@ -290,40 +259,31 @@ data.container <- data.container %>% mutate(putin.abshare = putin/voter.list)
 
 ###Generating nonstandard vote coefficients
 
-model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | territory.id),
+model.coefs <- lmer(putin.abshare~pct.nonstandard  + (1 + pct.nonstandard | city_id),
                     data=data.container, REML=FALSE)
 coefs.test <- coef(model.coefs)
-coefs.cg.postreat <- as_tibble(coefs.test$territory.id, rownames = 'territory.id') %>%
+coefs.cg.postreat <- as_tibble(coefs.test$city_id, rownames = 'city_id') %>%
   mutate(treatment.group = 0, post.treatment = 1)
 
-coefs.cg.postreat$regionid <- NA
+coefs.cg.postreat$year <- 2012
 
-j <- 1
-for(j in 1:nrow(coefs.cg.postreat)){
-  territory.name <- coefs.cg.postreat$territory.id[j]
-  data.container <- data.container %>% mutate(match.tf = (is.na(str_extract(data.container$territory.id, territory.name))==FALSE))
-  region.subset <- data.container %>% filter(match.tf == TRUE)
-  regionid.temp <- region.subset$regionid[1]
-  coefs.cg.postreat$regionid[j] <- regionid.temp 
-}
 
-###DO NOT OVERWRITE, USE A TEMP FILE
-#write.csv(coefs.cg.postreat, "coefs control group 2012 post-treatment.csv")
 
-###
-###Combining the coef datasets
-###
-coefs.cg.pretreat <- read.csv("coefs control group 2004 pre-treatment.csv")
-coefs.cg.postreat <- read.csv("coefs control group 2012 post-treatment.csv")
-coefs.tg.pretreat <- read.csv("coefs treatment group 2004 pre-treatment.csv")
-coefs.tg.postreat <- read.csv("coefs treatment group 2012 post-treatment.csv")
+write.csv(coefs.cg.postreat, "coefs control group 2012 post-treatment w city_id.csv")
+
+###Combining the coef data
+
+coefs.cg.pretreat <- read.csv("coefs control group 2004 pre-treatment w city_id.csv")
+coefs.cg.postreat <- read.csv("coefs control group 2012 post-treatment w city_id.csv")
+coefs.tg.pretreat <- read.csv("coefs treatment group 2004 pre-treatment w city_id.csv")
+coefs.tg.postreat <- read.csv("coefs treatment group 2012 post-treatment w city_id.csv")
 
 coefs.all <- rbind(coefs.cg.pretreat, coefs.cg.postreat, coefs.tg.pretreat,
                    coefs.tg.postreat)
-write.csv(coefs.all, "all coefs by territory with covariates.csv")
+write.csv(coefs.all, "all coefs by territory with covariates w city_id.csv")
 
 ###Quick test models
-coefs.all <- read.csv("all coefs by territory with covariates.csv") #This version has the covariates
+coefs.all <- read.csv("all coefs by territory with covariates w city_id.csv") #This version has the covariates
 
 didmodel <- lm(pct.nonstandard ~ treatment.group + post.treatment +
                  treatment.group*post.treatment, data=coefs.all)
@@ -337,51 +297,11 @@ reuter.data <- as_tibble(read.dta("reuter_et_al_data.dta")) #Next step is to con
 reuter.data.small <- reuter.data %>% filter(year == 2004 | year == 2012)  %>%
   mutate(regionid.reuter = regionid)
 
- ###Getting treatment covariates
-match.set <- read_excel("match-targets.xlsx") #Treatment cities
-data.container <- reuter.data.small %>% filter(regionid==99)   ##99 doesn't exit, so creates an empty tibble with correct columns
-
-i<-1
-
-for(i in 1:nrow(match.set)){
-  #sub.iteration <- reuter.data.small %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
-  match.targets <- as.character(match.set$reuter.name[i])
-  reuter.data.small <- reuter.data.small %>% mutate(match.tf = (is.na(str_extract(reuter.data.small$PositionCity, match.targets))==FALSE))
-  sub.iteration <- reuter.data.small %>% filter(match.tf == TRUE) %>% 
-    mutate(regionid = match.set$regionid[i])
-   if ((nrow(sub.iteration) == 0)){
-    print("Error, no observations")
-    break
-  }
-  data.container <- rbind(data.container, sub.iteration)
-}
-
-write.csv(data.container, "treatment city covariates.csv")
-
- ###Getting control covariates
-
-match.set <- read_excel("match-targets-control.xlsx") #Treatment cities
-data.container <- reuter.data.small %>% filter(regionid==99)   ##99 doesn't exit, so creates an empty tibble with correct columns
-
-i<-1
-
-for(i in 1:nrow(match.set)){
-  #sub.iteration <- reuter.data.small %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
-  match.targets <- as.character(match.set$reuter.name[i])
-  reuter.data.small <- reuter.data.small %>% mutate(match.tf = (is.na(str_extract(reuter.data.small$PositionCity, match.targets))==FALSE))
-  sub.iteration <- reuter.data.small %>% filter(match.tf == TRUE) %>% 
-    mutate(regionid = match.set$regionid[i])
-  if ((nrow(sub.iteration) == 0)){
-    print("Error, no observations")
-    break
-  }
-  data.container <- rbind(data.container, sub.iteration)
-}
-
-write.csv(data.container, "control city covariates.csv")
-
-###Coef sheets now have city_id column
-###Next issue is figuring out how to:
-###1) connect city_id to whole cities (all districts) in the precinct data
-###2) Rerun coef models with that instead of territory.id (which can return 2 points instead of one)
-###3) While maintaining city_id in resulting data.
+full.data <- coefs.all %>% inner_join(reuter.data.small, by=c("city_id", "year"))
+write.csv(full.data, "coefs with city covariates.csv")
+###Quick test model of full data
+full.data <- read.csv("coefs with city covariates.csv")
+didmodel <- lm(pct.nonstandard ~ treatment.group + post.treatment +
+                 treatment.group*post.treatment +
+                 URshare + unemployrate + dem + pctRussian2002_new + education, data=full.data)
+summary(didmodel)  #Success!
