@@ -303,5 +303,10 @@ write.csv(full.data, "coefs with city covariates.csv")
 full.data <- read.csv("coefs with city covariates.csv")
 didmodel <- lm(pct.nonstandard ~ treatment.group + post.treatment +
                  treatment.group*post.treatment +
-                 URshare + unemployrate + dem + pctRussian2002_new + education, data=full.data)
+                 URshare + lnAvgSalary + unemployrate +  dem + pctRussian2002_new + education, data=full.data)
 summary(didmodel)  #Success!
+
+##Next thing may be to code mayors in the treatment group who are holdovers
+##I.e. elected mayors who were then appointed
+##A quick scan suggests they are all different; i.e. no one is in this set
+
