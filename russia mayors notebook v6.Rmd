@@ -1,0 +1,337 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+##Setup and balance##
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(CBPS)
+library(lmtest)  #Getting clustered sEs 
+library(sandwich)
+library(ggplot2)
+library(stargazer)
+library(interplot)
+library(eventStudy)
+library(data.table)
+library(cobalt) #Balance; very useful package
+```
+
+
+```{r}
+full.data <- read.csv("cleaned data full all years.csv")
+
+
+full.data <- full.data %>% mutate(years.since.treat = ifelse(is.na(cancel.year) == TRUE | cancel.year > year.x, 0, (year.x - cancel.year) + 1))
+
+#full.data <- full.data %>% mutate(treat.weight.year = ifelse(treated.0708 == 1, treated.0708 / years.since.treat, 0))
+
+full.data <- full.data %>% mutate(years_with_elections = ifelse(is.na(cancel.year) == TRUE, year.x - 2003, year.x - cancel.year))
+
+full.data <- full.data %>% mutate(turnout.coef.susp = ifelse(turnout.coef >= 1, 1, 0))
+
+
+full.data <- full.data %>% mutate(election.period = ifelse(year.x == 2003, 1, ifelse(year.x == 2004, 2, ifelse(year.x
+                                  == 2007, 3, ifelse(year.x == 2008, 4,
+                                  ifelse(year.x == 2011, 5, 6))))))
+
+full.data <- full.data %>% mutate(treat.cohort = ifelse(is.na(cancel.year) == TRUE, "Inf", ifelse(cancel.year >= 2004 &                                                  cancel.year < 2007, 2, ifelse(
+                                                 cancel.year == 2007, 3, ifelse(
+                                                   cancel.year >= 2008 & cancel.year < 2011, 4, ifelse(
+                                                     cancel.year == 2011, 5, "Inf"
+                                                   )
+                                                 )
+))))
+
+
+
+#full.data <- full.data %>% mutate(rel.treat.time = ifelse(treat.cohort == "Inf", 0, time.period - as.numeric(treat.cohort)))
+
+full.data <- full.data %>% mutate(treat.cohort = factor(treat.cohort))
+
+#Next make individual variables for each level of the factor; also try the same approach with only three periods (year <= 2004 = 0, year <=2008 = 1, year <= 2012 = 2)
+
+
+
+
+full.data <- full.data %>% mutate(cohort2 = ifelse(as.numeric(treat.cohort) == 2, 1, 0))
+full.data <- full.data %>% mutate(cohort3 = ifelse(as.numeric(treat.cohort) == 3, 1, 0))
+full.data <- full.data %>% mutate(cohort4 = ifelse(as.numeric(treat.cohort) == 4, 1, 0))
+full.data <- full.data %>% mutate(cohort5 = ifelse(as.numeric(treat.cohort) == 5, 1, 0))
+full.data <- full.data %>% mutate(cohort_inf = ifelse(treat.cohort == "Inf", 1, 0))
+
+full.data <- full.data %>% mutate(appointed.exec = ifelse(treated.0708 == 1 | treated.1112, 1, 0))
+#full.data <- full.data %>% mutate(appointed.exec = ifelse(year.x == 2003, NA, appointed.exec))
+
+full.data <- full.data %>% mutate(elected.transition = ifelse(year.x < cancel.year & exec.first.election == 1, 1, 0))
+full.data <- full.data %>% mutate(appointed.transition = ifelse(year.x >= cancel.year & cross.regime.transition == 0 & exec.first.election == 1, 1, 0))
+
+
+full.data <- 
+    full.data %>%
+    group_by(city_id) %>%
+    mutate(lag.manipulation = dplyr::lag(turnout.coef, n = 1, default = NA)) #Lagging manipulation
+
+```
+
+Creating relative treatment counter using time.period instead of calendar time
+Time periods are:
+2003 == 1
+2004 == 2
+2007 == 3
+2008 == 4
+2011 == 5
+2012 == 6
+
+Treatment period should collapse to the previous election time. I.e. elections canceled between 2004 and 2007 should score as 2, so that they are 1 period post treatment by 2007 election
+
+```{r}
+full.data <- full.data %>% mutate(cancel.period = ifelse(is.na(cancel.year) == TRUE, NA, ifelse(
+  cancel.year < 2007, 3, ifelse(
+    cancel.year == 2007, 4, ifelse(
+      cancel.year > 2007 & cancel.year < 2011, 5, ifelse(
+        cancel.year == 2011, 6, NA
+      )
+    ) 
+  )
+)))
+
+#full.data <- full.data %>% mutate(rel.treat.period = ifelse())
+```
+
+```{r}
+full.data <- full.data %>% mutate(election.period = as.integer(election.period))
+full.data <- full.data %>% mutate(cancel.period = as.integer(cancel.period))
+
+full.data.table <- data.table(full.data)
+
+full.data <- full.data %>% mutate(rel.treat.time = ifelse(is.na(cancel.period) == TRUE, -1, election.period - cancel.period))
+
+
+full.data <- full.data %>%
+  mutate(rel.treat.time2 = rel.treat.time)
+
+full.data <- full.data %>%
+  mutate(value = 1,
+         rel.treat.time2 = paste0("rel.time", rel.treat.time2)) %>%
+  spread(rel.treat.time2, value, fill = 0)
+
+
+full.data <- full.data %>% mutate(cohort1 = ifelse(cancel.period == 1, 1, 0))
+full.data <- full.data %>% mutate(cohort2 = ifelse(cancel.period == 2, 1, 0))
+full.data <- full.data %>% mutate(cohort3 = ifelse(cancel.period == 3, 1, 0))
+full.data <- full.data %>% mutate(cohort4 = ifelse(cancel.period == 4, 1, 0))
+full.data <- full.data %>% mutate(cohort5 = ifelse(cancel.period == 5, 1, 0))
+full.data <- full.data %>% mutate(cohort6 = ifelse(cancel.period == 6, 1, 0))
+full.data <- full.data %>% mutate(cohort.untreat = ifelse(is.na(cancel.period) == T, 1, 0))
+
+
+full.data <- full.data %>%
+  mutate(ethnic.categorical2 = ethnic.categorical)
+
+full.data <- full.data %>%
+  mutate(value = 1,
+         ethnic.categorical2 = paste0("ethcat", ethnic.categorical2)) %>%
+  spread(ethnic.categorical2, value, fill = 0)
+
+```
+
+
+Looking at balance; there isn't much difference on any of these dimensions except 'dem'.
+
+```{r}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+
+```{r}
+###Untreated vs. early treated
+treated.obs1 <- full.data %>% filter(year.x <= 2008)
+covs <- treated.obs1  %>% dplyr::select(nonstandard.coefs03, ur.coef.2003, ur.voteshare.2003,
+                             nonstandard.coefs04, ur.coef.2004, ur.voteshare.2004, dem, civsoc91,
+                             kprf99, education, pctRussian2002_new, opp_mayor1)
+bal.tab(covs, treat = treated.obs1$treated.0708)
+p.bal.ns03 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "nonstandard.coefs03")
+p.bal.ns04 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "nonstandard.coefs04")
+p.bal.urc03 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.coef.2003") + labs(title = "", x = "United Russia manipulation coefficient\n (2003)")
+p.bal.urc04 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.coef.2004") +  labs(title = "", x = "United Russia manipulation coefficient\n (2004)")
+p.bal.urvs03 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.voteshare.2003") + labs(title = "", x = "United Russia vote-share\n (2003)")
+p.bal.urvs04 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.voteshare.2004") + labs(title = "", x = "United Russia vote-share\n (2004)")
+p.bal.dem <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "dem")
+p.bal.rus <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "pctRussian2002_new")
+p.bal.opp <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "opp_mayor1") + labs(title = "Distributional Balance for 'opposition mayor', first wave", x = "Opposition mayor")
+
+
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.coef.2003, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.coef.2004, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.voteshare.2003, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.voteshare.2004, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(dem, na.rm=TRUE))
+
+###Early treated vs late treated
+treated.obs2 <- full.data %>% filter(year.x >= 2007 & treated.0708 == 0 | treated.1112 == 1)
+covs <- treated.obs  %>% dplyr::select(nonstandard.coefs03, ur.coef.2003, ur.voteshare.2003,
+                             nonstandard.coefs04, ur.coef.2004, ur.voteshare.2004, ur.coef.2007, ur.voteshare.2007, ur.coef.2008, ur.voteshare.2008,  dem, civsoc91,
+                             kprf99, education, pctRussian2002_new, opp_mayor1)
+bal.tab(covs, treat = treated.obs$treated.1112)
+p.bal.ns03.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "nonstandard.coefs03")
+p.bal.ns04.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "nonstandard.coefs04")
+p.bal.urc03.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2003")
+p.bal.urc04.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2004")
+p.bal.urvs03.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2003")
+p.bal.urvs04.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2004")
+p.bal.urc07.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2007")
+p.bal.urvs07.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2007")
+p.bal.urc08.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2008")
+p.bal.urvs08.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2008")
+p.bal.dem.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "dem")
+p.bal.rus.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "pctRussian2002_new")
+p.bal.opp2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "opp_mayor1") + labs(title = "Distributional Balance for 'opposition mayor'", x = "Opposition mayor")
+
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.coef.2007, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.coef.2008, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.voteshare.2007, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.voteshare.2008, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(dem, na.rm=TRUE))
+
+###Multiplotting
+multiplot(p.bal.urc03, p.bal.urc04, p.bal.urvs03, p.bal.urvs04, cols= 2)
+
+multiplot(p.bal.urc07.2, p.bal.urc08.2, p.bal.urvs07.2, p.bal.urvs08.2, cols= 2)
+
+
+```
+
+
+##Main 2WFE models, fraud
+
+```{r baseline model}
+twfe.tc.v2.fac <- lm(turnout.coef ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov +  lnAvgSalary +
+                       unemployrate  +  education  + poppopprop + factor(years.since.treat), 
+                     data = full.data)
+summary(twfe.tc.v2.fac)
+```
+
+```{r baseline with lagged manipulation}
+twfe.tc.v2.fac.lag <- lm(turnout.coef ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov +  lnAvgSalary +
+                       unemployrate  +  education  + poppopprop + lag.manipulation + factor(years.since.treat), 
+                     data = full.data)
+summary(twfe.tc.v2.fac.lag)
+```
+
+
+###Main 2WFE models, UR voteshare
+
+```{r}
+twfe.ur.v3 <- lm(ur.voteshare ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + lnAvgSalary +
+                       unemployrate  +  education + factor(years.since.treat) + turnout.coef, data = full.data)
+summary(twfe.ur.v3)
+```
+
+###Tables
+
+```{r}
+stargazer(twfe.tc.v2.fac, twfe.tc.v2.fac.lag, twfe.ur.v3, type="html", omit = c("city_id", "year.x"), out="table_main.html")
+```
+
+###Event study framework
+
+Classic 'dynamic' model:
+
+Manipulation
+
+```{r}
+model.tc.dyn <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + `rel.time-5` + `rel.time-4` +
+                        `rel.time-3` + `rel.time-2` + `rel.time-1` + rel.time1 + rel.time2 + rel.time3 
+                   + urgov + mayor.tenure, data = full.data)
+summary(model.tc.dyn)
+```
+
+United Russia:
+
+```{r}
+model.ur.dyn <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + `rel.time-5` + `rel.time-4` +
+                        `rel.time-3` + `rel.time-2` + `rel.time-1` + rel.time1 + rel.time2 + rel.time3 
+                   + urgov + mayor.tenure + turnout.coef, data = full.data)
+summary(model.ur.dyn)
+```
+
+Table
+
+```{r include = FALSE}
+stargazer(model.tc.dyn, model.ur.dyn, type="html", omit = "factor", out="table_app_eventstudy.html")
+```
+
+Plot
+
+```{r}
+coefs.homog <- tidy(model.tc.dyn, conf.int = TRUE, conf.level = .90)
+coefs.homog.select <- coefs.homog[129:136,]
+coefs.homog.select <- coefs.homog.select %>% mutate(rel.time = c(-5, -4, -3, -2, -1, 1, 2, 3))
+new.row <- c(rep(NA, 7), 0)
+coefs.homog.select <- rbind(coefs.homog.select, new.row)
+
+att.plot <- ggplot(coefs.homog.select, aes(x = rel.time, y = estimate)) + geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + labs(title = "OLS estimates of relative time to treatment\n (90% confidence intervals)", x = "Time to treatment", y = "Estimate") + theme_bw()
+
+```
+
+
+```{r}
+coefs.homog <- tidy(model.ur.dyn, conf.int = TRUE, conf.level = .90)
+coefs.homog.select <- coefs.homog[129:136,]
+coefs.homog.select <- coefs.homog.select %>% mutate(rel.time = c(-5, -4, -3, -2, -1, 1, 2, 3))
+new.row <- c(rep(NA, 7), 0)
+coefs.homog.select <- rbind(coefs.homog.select, new.row)
+
+att.plot <- ggplot(coefs.homog.select, aes(x = rel.time, y = estimate)) + geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + labs(title = "OLS estimates of relative time to treatment\n (90% confidence intervals)", x = "Time to treatment", y = "Estimate") + theme_bw()
+
+```
+
