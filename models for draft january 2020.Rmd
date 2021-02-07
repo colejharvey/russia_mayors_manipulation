@@ -1,0 +1,406 @@
+---
+title: "Article draft"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(interactions)
+library(ggplot2)
+library(stargazer)
+library(did)
+library(fastDummies)
+
+
+full.data <- read.csv("coefs with city covariates cleaned.csv")
+
+```
+
+
+The decision point here is whether to focus on turnout coefs or nonstandard coefs, in addition to UR voteshare.  Turnout coef has no effect in the DiD models, so these would be dropped with explanation in this case. Nonstandard is supported in both cases, but is a more narrow form of manipulation. UR voteshare is only partially supported in the DiD models as well.
+
+
+Note also that the DiD models have some small groups, which could be excluded or merged into other groups.
+
+As a replacement for DiD, the OLS model sets also include an interaction between appointed executive and years under elections. Lower numbers on this represent early treated units.
+
+##Data transformations
+
+
+```{r}
+full.data <- full.data %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+full.data <- full.data %>% rename(turnout.coef = turnout)
+
+##Year and country factors
+
+full.data <- full.data %>% mutate(city_id_factor = as.factor(city_id))
+full.data <- full.data %>% mutate(year_factor = as.factor(year.x))
+
+##Explanatory variables for OLS
+full.data <- full.data %>% mutate(appointed.exec = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x >= cancel.year, 1, 0)))
+full.data <- full.data %>% mutate(years.under.regime = ifelse(appointed.exec == 0, year.x - 2000, year.x - cancel.year))
+
+full.data <- full.data %>% mutate(years.with.elections = ifelse(is.na(cancel.year)==T, year.x-1996, ifelse(year.x - cancel.year < 0, year.x - 1996, cancel.year - 1996))) #This gives a measure of early vs late vs. control; 1996 bc this is when local elections first took place 
+
+
+##Transformations for DiD
+
+full.data <- full.data %>% mutate(cancel.year = ifelse(is.na(cancel.year) == T, 0, cancel.year))
+
+full.data <- full.data %>% mutate(election.period = ifelse(year.x == 2003, 1, ifelse(year.x == 2004, 2, ifelse(year.x
+                                  == 2007, 3, ifelse(year.x == 2008, 4,
+                                  ifelse(year.x == 2011, 5, 6))))))
+
+#Codes abolitions in 2007 as part of wave 5 (keeping them as a separate group 4 results in a very small gorup). Same for abolitions in year 2011, now coded as occuring in period 5
+full.data <- full.data %>% mutate(cancel.period = ifelse(cancel.year == 0, 0, ifelse(cancel.year == 2003, 1, ifelse(cancel.year >= 2004 & cancel.year <= 2007, 3, ifelse(
+                                                   cancel.year >= 2008 & cancel.year <= 2011, 5, 6
+                                                   )
+                                                 )
+)))
+full.data <- full.data %>% mutate(cancel.period.f = as.factor(cancel.period))
+full.data <- dummy_cols(full.data, select_columns = "cancel.period.f")
+
+##Adjusting treatment year to lump small years in with bigger years
+
+full.data <- full.data %>% mutate(cancel.year.adj = ifelse(cancel.year == 2004, 2005, 
+                                                    ifelse(cancel.year == 2006, 2007,
+                                                    ifelse(cancel.year == 2009, 2010,
+                                                    ifelse(cancel.year == 2012, 0, cancel.year)))))
+```
+
+##OLS models
+
+Each chunk produces a main model (election-level controls) and a supplementary model (year fixed effects)
+
+###Turnout coefficient
+```{r}
+model.tc <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + appointed.exec*years.under.regime, data = full.data)
+sjPlot::plot_model(model.tc, type = "int")
+sjPlot::plot_model(model.tc, type = "pred", terms = c("years.under.regime", "appointed.exec"))
+
+sim_slopes(model.tc, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+interactions::interact_plot(model.tc, pred = appointed.exec, modx = years.under.regime, interval = TRUE, modx.values = c(0, 6, 12))
+interactions::interact_plot(model.tc, pred = years.under.regime, modx = appointed.exec, interval = TRUE, modx.values = c(0, 1))
+
+
+model.tc2 <- lm(turnout.coef ~ city_id_factor + year_factor +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +
+                 appointed.exec*years.under.regime, data = full.data)
+#summary(model.tc2)
+sim_slopes(model.tc2, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+
+
+model.tc3 <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + appointed.exec*years.with.elections, data = full.data)
+sim_slopes(model.tc3, pred = appointed.exec, modx = years.with.elections, jnplot = TRUE)
+
+```
+
+
+###Nonstandard coef
+
+```{r}
+model.ns <- lm(nonstandard.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + appointed.exec*years.under.regime, data = full.data %>% filter(nonstandard.coef > -2))
+#summary(model.ns)
+sim_slopes(model.ns, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+
+
+model.ns2 <- lm(nonstandard.coef ~ city_id_factor + year_factor +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + appointed.exec*years.under.regime, data = full.data %>% filter(nonstandard.coef > -2))
+#summary(model.ns2)
+sim_slopes(model.ns2, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+
+
+model.ns3 <- lm(nonstandard.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + appointed.exec*years.with.elections, data = full.data)
+sim_slopes(model.ns3, pred = appointed.exec, modx = years.with.elections, jnplot = TRUE)
+
+```
+
+
+###United Russia vote-share
+
+```{r}
+model.ur <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + turnout.coef + appointed.exec*years.under.regime, data = full.data)
+#summary(model.ur)
+sim_slopes(model.ur, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+
+model.ur2 <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) +   urgov + appointed.exec*years.under.regime + mayor.tenure  + lnAvgSalary + dem + comp.scale2 + turnout.coef, data = full.data)
+#summary(model.ur2)
+sim_slopes(model.ur2, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+
+model.ur3 <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + appointed.exec*years.with.elections + turnout.coef, data = full.data)
+sim_slopes(model.ur3, pred = appointed.exec, modx = years.with.elections, jnplot = TRUE)
+
+```
+
+
+##Callaway and Sant'Anna models
+
+Breaking up time periods by election type since election-level control is not possible
+
+Data for presidential years only
+
+```{r}
+data.pres <- full.data %>% filter(year.x == 2004 | year.x == 2008 | year.x == 2012)
+data.pres <- data.pres %>% mutate(cancel.period = ifelse(cancel.year == 0, 0, ifelse(cancel.year < 2004, 1, ifelse(cancel.year >= 2004 & cancel.year <= 2007, 2, 3
+                                                   )
+                                                 )
+))
+data.pres <- data.pres %>% mutate(election.period = ifelse(year.x == 2004, 1, ifelse(year.x == 2008, 2, 3)))
+
+```
+
+
+Data for legislative years only
+
+```{r}
+data.parl <- full.data %>% filter(year.x == 2003 | year.x == 2007 | year.x == 2011)
+data.parl <- data.parl %>% mutate(cancel.period = ifelse(cancel.year == 0, 0, ifelse(cancel.year < 2003, 1, ifelse(cancel.year >= 2004 & cancel.year < 2007, 2, 3
+                                                   )
+                                                 )
+))
+data.parl <- data.parl %>% mutate(election.period = ifelse(year.x == 2003, 1, ifelse(year.x == 2007, 2, 3)))
+
+```
+
+###Overall turnout coefficient
+
+```{r}
+data.complete <- data.pres %>%  dplyr::select(turnout.coef, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "turnout.coef",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = c("city_id"),
+              bstrap = T,
+              cband = T,
+              alp = .1)
+summary(out)
+#ggdid(out)
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+
+```
+
+```{r}
+data.complete <- data.parl %>% dplyr::select(turnout.coef, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "turnout.coef",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = "city_id",
+              bstrap = T,
+              cband = T,
+              alp = .1)
+summary(out)
+ggdid(out)
+
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+```
+
+
+
+###Nonstandard coefficient
+
+```{r}
+data.complete <- data.pres %>%  dplyr::select(nonstandard.coef, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "nonstandard.coef",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = c("city_id"),
+              bstrap = T,
+              cband = T)
+summary(out)
+ggdid(out)
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+
+```
+
+```{r}
+data.complete <- data.parl %>% dplyr::select(nonstandard.coef, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "nonstandard.coef",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = "city_id",
+              bstrap = T,
+              cband = T)
+summary(out)
+ggdid(out)
+
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+```
+
+
+###UR voteshare
+
+```{r}
+data.complete <- data.pres %>%  dplyr::select(ur.voteshare, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "ur.voteshare",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = c("city_id"),
+              bstrap = T,
+              cband = T)
+summary(out)
+ggdid(out)
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+
+```
+
+```{r}
+data.complete <- data.parl %>% dplyr::select(ur.voteshare, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "ur.voteshare",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = "city_id",
+              bstrap = T,
+              cband = T)
+summary(out)
+ggdid(out)
+
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+```
+
+###Combined DiD models
+
+Overall turnout coefficient
+```{r}
+data.complete <- full.data %>%  dplyr::select(turnout.coef, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "turnout.coef",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = c("city_id"),
+              bstrap = T,
+              cband = T,
+              anticipation = 1,
+              alp = .1)#,
+              #anticipation = 1)
+summary(out)
+#ggdid(out)
+
+
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+```
+
+Nonstandard coefs
+
+```{r}
+data.complete <- full.data %>%  dplyr::select(nonstandard.coef, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "nonstandard.coef",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = c("city_id"),
+              bstrap = T,
+              cband = T,
+              anticipation = 1)#,
+              #anticipation = 1)
+summary(out)
+#ggdid(out)
+
+
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+```
+
+
+United Russia voteshare
+
+```{r}
+data.complete <- full.data %>%  dplyr::select(ur.voteshare, cancel.year.adj, city_id, year.x, 
+                                 dem) %>% filter(city_id != 90)
+data.complete <- data.complete[complete.cases(data.complete),]
+
+out <- att_gt(yname = "ur.voteshare",
+              gname = "cancel.year.adj",
+              idname = "city_id",
+              tname = "year.x",
+              xformla = ~ dem,
+              data = data.complete,
+              est_method = "reg",
+              clustervars = c("city_id"),
+              bstrap = T,
+              cband = T,
+              anticipation = 1)#,
+              #anticipation = 1)
+summary(out)
+#ggdid(out)
+
+
+
+simp <- aggte(out, type = "simple")
+summary(simp)
+```

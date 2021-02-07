@@ -1,0 +1,363 @@
+---
+title: "Appointed vs elected mayors in Russia"
+output: html_notebook
+---
+
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(CBPS)
+library(lmtest)  #Getting clustered sEs 
+library(sandwich)
+library(ggplot2)
+library(stargazer)
+
+full.data <- read.csv("coefs with city covariates.csv")
+
+full.data <- full.data %>% mutate(treat.running = ifelse(year.x <= 2004, 0, ifelse(year.x <= 2007 & (treat.group.08 == 1 | treat.group.07 == 1), 1, ifelse(treat.group.12 == 1 | treat.group.11 == 1, 1, 0))))
+
+full.data.0308 <- subset(full.data, full.data$year.x <= 2008)
+full.data.0308 <- full.data.0308 %>% filter(is.na(cancel.year) == TRUE | cancel.year >= 2003)
+full.data.0308 <- full.data.0308 %>% mutate(treat.group.0308 = ifelse(is.na(cancel.year == TRUE), 0, 
+                                                                      ifelse(cancel.year < 2008, 1, 0)))
+full.data.0308 <- full.data.0308 %>% mutate(post.treat.0308 = ifelse(year.x == 2007 | year.x == 2008, 1, 0))
+
+full.data.0712 <- subset(full.data, full.data$year.x >= 2007)
+full.data.0712 <- full.data.0712 %>% filter(is.na(cancel.year) == TRUE | cancel.year > 2008)
+full.data.0712 <- full.data.0712 %>% mutate(treat.group.0712 = ifelse(is.na(cancel.year == TRUE), 0, 
+                                                                      ifelse(cancel.year <= 2010, 1, 0)))
+full.data.0712 <- full.data.0712 %>% mutate(post.treat.0712 = ifelse(year.x == 2011 | year.x == 2012, 1, 0))
+
+full.data.0312 <- subset(full.data, full.data$year.x <= 2004 | full.data$year.x > 2008)
+full.data.0312 <- full.data.0312 %>% filter(is.na(cancel.year) == TRUE | cancel.year > 2008)
+full.data.0312 <- full.data.0312 %>% mutate(treat.group.0312 = ifelse(is.na(cancel.year == TRUE), 0, 
+                                                                      ifelse(cancel.year > 2008 & cancel.year <= 2010, 1, 0)))
+full.data.0312 <- full.data.0312 %>% mutate(post.treat.0312 = ifelse(year.x == 2011 | year.x == 2012, 1, 0))
+
+###Correcting coding errors below
+
+full.data <- full.data %>% mutate(treatment.group = ifelse(city_id == 90 | city_id == 176, 1, treatment.group))
+full.data <- full.data %>% mutate(treatment.group = ifelse(city_id == 175, 0, treatment.group))
+
+```
+
+Example plot for nonstandard coefficient
+
+```{r}
+penza <- read.csv("penza2011.csv")
+armavir <- read.csv("armavir2011.csv")
+
+penza <- penza %>% mutate(regionname = "Penza")
+armavir <- armavir %>% mutate(regionname = "Armavir")
+
+regions.data <- rbind(penza, armavir)
+regions.data <- regions.data %>% mutate(regionname = factor(regionname))
+
+p.nonstandard <- ggplot(regions.data, aes(pct.nonstandard, ur.abshare)) + geom_point() + facet_grid(cols = vars(regionname)) + geom_smooth(se = FALSE, method = lm)
+
+p.nonstandard + labs(x = "Percent nonstandard", y = "UR absolute vote-share") + theme_bw()
+
+```
+
+
+Example plot for turnout coefficient
+
+```{r}
+volgodonsk <- read.csv("Volgodonsk2011.csv")
+novgorod <- read.csv("VelikijNovgorod2011.csv")
+
+volgodonsk <- volgodonsk %>% mutate(regionname = "Volgodonsk")
+novgorod <- novgorod %>% mutate(regionname = "Velikij Novgorod")
+
+regions.data <- rbind(volgodonsk, novgorod)
+regions.data <- regions.data %>% mutate(regionname = factor(regionname))
+
+p.nonstandard <- ggplot(regions.data, aes(turnout, ur.abshare)) + geom_point() + facet_grid(cols = vars(regionname)) + geom_smooth(se = FALSE, method = lm)
+
+p.nonstandard + theme_bw()
+
+```
+
+
+
+##Covariate balancing propensity score models for 2003-2008
+
+Selection model and balance statistics
+
+'margin' refers to the mayor's most recent margin of victory at a given year
+
+'regelect_margin' refers to United Russia's vote-share in the most recent legislative election in the mayor's city under that mayor
+
+
+Note that CBPS package has a longitudinal data version (CBMSM), but it does not cooperate with this data--throws an error 'replacement has length zero'
+
+```{r}
+form0 <- "d.gone.neg ~ d.gone.neg.l1 + camp.length"
+fit0<-CBMSM(formula = form0, time=Blackwell$time,id=Blackwell$demName,
+data=Blackwell, type="MSM", iterations = NULL, twostep = TRUE,
+msm.variance = "approx", time.vary = FALSE)
+```
+
+```{r}
+#full.data.0308 <- full.data.0308 %>% mutate(cbps.treat.0708 =   ifelse(treat.group.0308 == 1 & year.x >= 2007, 1, 0))
+
+myvars <- c("city_id", "nonstandard.coef",  "treat.running",
+                "ethnic.categorical",  "urgov", "margin", "mayor.tenure",
+                 "lnAvgSalary",  "unemployrate",  "dem", "regelect_margin",  "education", "presidential", "poppopprop", "regmarginXmargin", "year.x", "PositionCity")
+   
+dataset.matching <- full.data[myvars]
+dataset.matching.complete <- na.omit(dataset.matching)
+#dataset.matching.complete <- dataset.matching.complete %>% mutate(time = ifelse(year.x == 2003, 1, ifelse(year.x == 2004, 2, ifelse(year.x == 2007, 3, 4))))
+
+form0 <-  "treat.running ~ margin + dem + regelect_margin +
+                  poppopprop + mayor.tenure + lnAvgSalary + regmarginXmargin"  
+cbps.out.0308 <- CBMSM(form0, data=dataset.matching.complete, time = dataset.matching.complete$year.x, id = dataset.matching.complete$PositionCity)
+```
+
+##Cross section versions below
+
+
+```{r}
+full.data.0308 <- full.data.0308 %>% mutate(cbps.treat.0708 =   ifelse(treat.group.0308 == 1 & year.x >= 2007, 1, 0))
+
+myvars <- c("city_id", "nonstandard.coef",  "cbps.treat.0708",
+                "ethnic.categorical",  "urgov", "margin", "mayor.tenure",
+                 "lnAvgSalary",  "unemployrate",  "dem", "regelect_margin",  "education", "presidential", "poppopprop", "regmarginXmargin", "year.x")
+   
+dataset.matching <- full.data.0308[myvars]
+dataset.matching <- dataset.matching %>% filter(year.x >= 2007)
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.0308 <- CBPS(cbps.treat.0708 ~ margin + dem + regelect_margin +
+                        poppopprop + mayor.tenure + lnAvgSalary + regmarginXmargin, data=dataset.matching.complete)
+summary(cbps.out.0308)
+oversight.bal.firstround <- CBPS::balance(cbps.out.0308)
+oversight.bal.firstround
+
+pct.improvement.round1 <- abs((oversight.bal.firstround$balanced[,1] - oversight.bal.firstround$original[,1])/oversight.bal.firstround$original[,1])
+```
+
+Second-stage model using CBPS weights
+
+
+
+```{r}
+cbpsmodel0308 <- lm(nonstandard.coef ~ cbps.treat.0708 + ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary + regelect_margin +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0308$weights,
+                      data = cbps.out.0308$data)
+summary(cbpsmodel0308)
+
+
+
+coeftest.results.0308 <- coeftest(cbpsmodel0308, vcov = vcovCL(cbpsmodel0308, type="HC1", cluster = cbps.out.0308$data$city_id)) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results.0308
+
+
+```
+
+##CBPS models for 2007-2012
+
+Selection model
+
+```{r}
+full.data.0712 <- full.data.0712 %>% mutate(cbps.treat.1112 = ifelse(treat.group.0712 == 1 & year.x >= 2011, 1, 0))
+   myvars <- c("city_id", "nonstandard.coef",  "cbps.treat.1112",
+                "ethnic.categorical",  "urgov", "margin", "mayor.tenure",
+                 "lnAvgSalary",  "unemployrate",  "dem", "regelect_margin",  "education", "presidential", "poppopprop", "regmarginXmargin", "year.x")
+   
+   
+dataset.matching <- full.data.0712[myvars]
+dataset.matching <- dataset.matching %>% filter(year.x >= 2011)
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.0712 <- CBPS(cbps.treat.1112 ~ margin + dem + regelect_margin +
+                        poppopprop + mayor.tenure + lnAvgSalary + regmarginXmargin, data=dataset.matching.complete)
+
+summary(cbps.out.0712)
+oversight.bal.secondround <- CBPS::balance(cbps.out.0712)
+oversight.bal.secondround
+
+pct.improvement.round2 <- abs((oversight.bal.secondround$balanced[,1] - oversight.bal.secondround$original[,1])/oversight.bal.secondround$original[,1])
+```
+
+
+Second-stage model
+
+```{r}
+cbpsmodel0712 <- lm(nonstandard.coef ~ cbps.treat.1112 + ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary + regelect_margin +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0712$weights,
+                      data = cbps.out.0712$data)
+summary(cbpsmodel0712)
+   
+coeftest.results.0712 <- coeftest(cbpsmodel0712, vcov = vcovCL(cbpsmodel0712, type="HC1", cluster = cbps.out.0712$data$city_id))
+
+coeftest.results.0712
+```
+
+##CBPS models for 2003-2012
+
+Selection model without vars with high missingness
+
+```{r}
+
+#full.data <- full.data %>% mutate(cbps.treat.1112 = ifelse(treatment.group == 1 & year.x >= 2011, 1, 0))
+
+
+myvars <- c("city_id", "nonstandard.coef",  "treatment.group",
+                "ethnic.categorical",  "urgov", "margin", 
+            "mayor.tenure",
+                 "lnAvgSalary",  "unemployrate",  "dem", "regelect_margin",
+            "education", "presidential", "poppopprop", "year.x", "regmarginXmargin")
+   
+   
+dataset.matching <- full.data[myvars]
+dataset.matching <- dataset.matching %>% filter(year.x >= 2011)
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.0312 <- CBPS(treatment.group ~ margin + dem + regelect_margin +
+                        
+                      poppopprop + mayor.tenure + lnAvgSalary +regmarginXmargin
+                        , data=dataset.matching.complete)
+summary(cbps.out.0312)
+
+oversight.bal.all <- CBPS::balance(cbps.out.0312)
+
+pct.improvement.all <- abs((oversight.bal.all$balanced[,1] - oversight.bal.all$original[,1])/oversight.bal.all$original[,1])
+```
+
+```{r}
+
+cbpsmodel0312 <- lm(nonstandard.coef ~ treatment.group + ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary + regelect_margin +
+                     unemployrate +  dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0312$weights,
+                      data = cbps.out.0312$data)
+summary(cbpsmodel0312)
+   
+coeftest(cbpsmodel0312, vcov = vcovCL(cbpsmodel0312, type="HC1", cluster = cbps.out.0312$data$city_id))
+```
+
+
+Full selection model with lots of missingness (results in few treatment obs)
+
+```{r}
+
+full.data <- full.data %>% mutate(cbps.treat.1112 = ifelse(treatment.group == 1 & year.x >= 2011, 1, 0))
+
+full.data.0312 <- subset(full.data, full.data$year.x <= 2004 | full.data$year.x > 2008)
+
+myvars <- c("city_id", "nonstandard.coef",  "cbps.treat.1112",
+                "ethnic.categorical",  "urgov", "margin", 
+            "mayor.tenure",
+                 "lnAvgSalary",  "unemployrate", "dem", "regelect_margin",
+            "education", "presidential", "poppopprop", "regmarginXmargin")
+   
+   
+dataset.matching <- full.data.0312[myvars]
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.0312 <- CBPS(cbps.treat.1112 ~ margin + dem + regelect_margin +
+                        poppopprop + mayor.tenure + lnAvgSalary+ 
+                        regmarginXmargin
+                        , data=dataset.matching.complete)
+summary(cbps.out.0312)
+
+oversight.bal.all <- balance(cbps.out.0312)
+
+pct.improvement.all <- (oversight.bal.all$balanced[,1] - oversight.bal.all$original[,1])/oversight.bal.all$original[,1]
+```
+
+
+```{r}
+
+cbpsmodel0312 <- lm(nonstandard.coef ~ cbps.treat.1112 + ethnic.categorical
+                   + urgov + margin +
+                     mayor.tenure + lnAvgSalary + regelect_margin +
+                     unemployrate +  dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0312$weights,
+                      data = cbps.out.0312$data)
+summary(cbpsmodel0312)
+   
+coeftest(cbpsmodel0312, vcov = vcovCL(cbpsmodel0312, type="HC1", cluster = cbps.out.0312$data$city_id))
+```
+
+
+##Tables for CBPS balance and outcomes
+
+```{r}
+pct.improvement.combined <- matrix(NA, nrow = 7, ncol = 3)
+pct.improvement.combined[,1] <- names(pct.improvement.round1)
+pct.improvement.combined[,2] <- round(pct.improvement.round1, 4)
+pct.improvement.combined[,3] <- round(pct.improvement.round2, 4)
+stargazer(pct.improvement.combined, type="html", out = "balance improvement.html")
+```
+
+```{r}
+stargazer(coeftest.results.0308, coeftest.results.0712, type="html", out = "outcome models.html")
+```
+
+
+##Difference in differences models
+
+2003-2008
+
+```{r}
+didmodel03 <- lm(nonstandard.coef ~ treat.group.0308 + post.treat.0308 +
+                   ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary + #regelect_margin +
+                     unemployrate +  dem +  
+                     education +
+                     presidential +
+                 treat.group.0308*post.treat.0308, data=full.data.0308)
+summary(didmodel03)
+
+#coeftest(didmodel03, vcov = vcovCL(didmodel03, type="HC1", cluster = full.data.0308$city_id.y))
+```
+
+2007-2012
+
+```{r}
+didmodel07 <- lm(nonstandard.coef ~ treat.group.0712 + post.treat.0712 +
+                   ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary + #regelect_margin +
+                     unemployrate +  dem +  
+                     education +
+                     presidential +
+                 treat.group.0712*post.treat.0712, data=full.data.0712)
+summary(didmodel07)
+```
+
+
+```{r}
+full.data.0312 <- full.data.0312 %>% mutate(city_id = factor(city_id))
+
+didmodel0312 <- lm(nonstandard.coef ~ treatment.group + post.treat.0312 +
+                   ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary + #regelect_margin +
+                     unemployrate +  dem +  
+                     education +
+                     presidential +
+                 treatment.group*post.treat.0312, data=full.data.0312)
+summary(didmodel0312)
+
+
+```

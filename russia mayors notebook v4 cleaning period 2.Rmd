@@ -1,0 +1,713 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Getting tenure average and first year
+
+Current method gives every mayor their year in office for every row
+Then for each row, subtracts that from the current year
+Then takes the average of that for each row (i.e. 0 + 1 + 2 = 3,  3 / 3 = 1 for a three year term)
+
+But note that tenure.avg does not only look at pre-treatment mayors
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(CBPS)
+library(lmtest)  #Getting clustered sEs 
+library(sandwich)
+library(ggplot2)
+library(stargazer)
+reuter.data <- read.csv("reuter_et_al_data_v2.csv")
+reuter.data <- reuter.data %>% mutate(city_mayor = paste(city_id, mayorid, sep="_"))
+
+
+mayors.start <- reuter.data %>% group_by(mayorid) %>% summarise(min(year))
+mayors.start <- mayors.start %>% rename(mayor.start.year = `min(year)`)
+mayors.end <- reuter.data %>% group_by(mayorid) %>% summarise(max(year))
+mayors.end <- mayors.end %>% rename(mayor.end.year = `max(year)`)
+
+
+reuter.data <- merge(reuter.data, mayors.start, by="mayorid")
+reuter.data <- merge(reuter.data, mayors.end, by="mayorid")
+
+
+reuter.data <- reuter.data %>% mutate(mayor.tenure = year - mayor.start.year)
+reuter.data <- reuter.data %>% mutate(years.since.treatment = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(
+  year - cancel.year >= 0, year - cancel.year, 0)))
+
+city.mayors <- unique(reuter.data$city_mayor)
+data.container <- matrix(NA, nrow = length(city.mayors), ncol = 2)
+
+
+mayor.tenure.avg <- reuter.data %>% group_by(mayorid) %>% summarise(mean(mayor.tenure, na.rm=TRUE))
+reuter.data <- merge(reuter.data, mayor.tenure.avg, by="mayorid")
+reuter.data <- reuter.data %>% rename(mayor.tenure.avg = "mean(mayor.tenure, na.rm = TRUE)")
+
+
+city.ids <- unique(reuter.data$city_id)
+data.container <- matrix(NA, nrow = length(city.ids), ncol = 2)
+
+i<-1
+
+for(i in 1:length(city.ids)){
+subgroup <- subset(reuter.data, reuter.data$city_id == city.ids[i])
+
+if (is.na(unique(subgroup$cancel.year)) == TRUE) {
+  subgroup2012 <- subset(subgroup, subgroup$year == 2012)
+  mayor.2012 <- subgroup2012$mayorid
+  mayor.obs <- subset(subgroup, subgroup$mayorid == mayor.2012)
+  mayor.start <- min(mayor.obs$year)
+  mayor.term.pretreat <- 2012 - mayor.start
+}
+
+else {
+  cancelyear <- unique(subgroup$cancel.year)
+  subgroup.cancelyear <- subset(subgroup, subgroup$year == cancelyear)
+  mayor.cancelyear <- subgroup.cancelyear$mayorid
+  mayor.obs <- subset(subgroup, subgroup$mayorid == mayor.cancelyear)
+  mayor.start <- min(mayor.obs$year)
+  mayor.term.pretreat <- cancelyear - mayor.start
+  }
+data.container[i, 1] <- city.ids[i]
+data.container[i, 2] <- mayor.term.pretreat
+}
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_id = V1)
+data.container <- data.container %>% rename(mayor.term.pretreat1112 = V2)
+
+reuter.data <- merge(reuter.data, data.container, by ="city_id")
+
+
+
+reuter.data.p2 <- reuter.data %>% filter(year >= 2007)
+reuter.data.p2 <- reuter.data.p2 %>% filter(cancel.year >= 2008 | is.na(cancel.year) == TRUE)
+
+```
+
+
+Data cleaning ultimately requires one observation for each city in 2007 and 2008, to be combined later with the same results for the second period.
+
+1) Each observation should have the following index variables:
+
+'city_id', 'mayorid', 'city_mayor', 'year' 'regionid_ch', 'cancel.year'
+
+2) The treatment variables 'treated.0708' and 'treated.1112', which are determined by 'cancel.year' and 'year'
+
+3) The dependent variable 'nonstandard.coef.0708' and 'nonstandard.coef.1112'
+
+4) The pre-treatment variables 'margin_pretreat', 'dem', 'regelect_margin_pretreat', 'popprop.avg.pretreat', 'tenure_pretreat', 'salaryavg_pretreat', 'regmarginXmargin_pretreat'
+
+5) The election-year variables 'ethnic.categorical', 'urgov' 'margin', 'mayor.tenure', 'lnAvgSalary', 'regelect_margin', 'unemployrate', 'education' and 'presidential'
+
+
+
+```{r}
+#reuter.base <- reuter.data.p2 %>% filter(year >= 2007) #Sets up the base dataframe, includes all step 1 variables except regionid_ch
+```
+
+Creating step 2) treatment variables
+
+```{r}
+reuter.data.p2 <- reuter.data.p2 %>% mutate(treated.1112 = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year > 2007 & cancel.year <= 2011, 1, 0)))
+```
+
+
+Creating step 3) dependent variables
+
+```{r}
+coefs.all <- read.csv("all ur coefs with cityid.csv") 
+coefs.all <- coefs.all %>% dplyr::select(-X, - X.1)
+
+#coefs.only <- coefs.all %>% dplyr::select(city_id_year, city_id, pct.nonstandard, year)
+
+coefs.2007 <- coefs.all %>% filter(year == 2007)
+coefs.2008 <- coefs.all %>% filter(year == 2008)
+coefs.2011 <- coefs.all %>% filter(year == 2011)
+coefs.2012 <- coefs.all %>% filter(year == 2012)
+
+coefs.2011 <- coefs.2011 %>% rename(nonstandard.coefs11 = pct.nonstandard, ur.coef.2011 = turnout, ur.voteshare.2011 = ur.voteshare)
+coefs.2012 <- coefs.2012 %>% rename(nonstandard.coefs12 = pct.nonstandard, ur.coef.2012 = turnout, ur.voteshare.2012 = ur.voteshare)
+coefs.2007 <- coefs.2007 %>% rename(nonstandard.coefs07 = pct.nonstandard, ur.coef.2007 = turnout, ur.voteshare.2007 = ur.voteshare)
+coefs.2008 <- coefs.2008 %>% rename(nonstandard.coefs08 = pct.nonstandard, ur.coef.2008 = turnout, ur.voteshare.2008 = ur.voteshare)
+
+
+coefs.2011 <- coefs.2011 %>% dplyr::select(nonstandard.coefs11, ur.coef.2011, ur.voteshare.2011, city_id)
+coefs.2012 <- coefs.2012 %>% dplyr::select(nonstandard.coefs12, ur.coef.2012, ur.voteshare.2012, city_id)
+coefs.2007 <- coefs.2007 %>% dplyr::select(nonstandard.coefs07, ur.coef.2007, ur.voteshare.2007, city_id)
+coefs.2008 <- coefs.2008 %>% dplyr::select(nonstandard.coefs08, ur.coef.2008, ur.voteshare.2008, city_id)
+
+
+
+reuter.data.p2 <- merge(reuter.data.p2, coefs.2011, by = "city_id")
+reuter.data.p2 <- merge(reuter.data.p2, coefs.2012, by = "city_id")
+reuter.data.p2 <- merge(reuter.data.p2, coefs.2007, by = "city_id")
+reuter.data.p2 <- merge(reuter.data.p2, coefs.2008, by = "city_id")
+
+
+reuter.data.p2 <- reuter.data.p2 %>% mutate(nonstandardcoef.0708 = ifelse(year == 2007, nonstandard.coefs07, ifelse(year == 2008, nonstandard.coefs08, NA)))
+
+#reuter.base <- reuter.base %>% mutate(nonstandardcoef.1112 = ifelse(year == 2011, nonstandard.coefs11, ifelse(year == 2012, nonstandard.coefs12, NA)))
+
+```
+
+
+
+Creating the step 4) pre-treatment variables: 'margin_pretreat', 'dem', 'regelect_margin_pretreat', 'popprop.avg.pretreat', 'tenure_pretreat', 'salaryavg_pretreat', 'regmarginXmargin_pretreat'
+
+```{r}
+city.ids <- unique(reuter.data.p2$city_id)
+data.container <- matrix(NA, nrow = length(city.ids), ncol = 2)
+
+i<-1
+
+for(i in 1:length(city.ids)){
+subgroup <- subset(reuter.data.p2, reuter.data.p2$city_id == city.ids[i])
+data.container[i,1] <- city.ids[i]
+data.container[i, 2] <- ifelse(sum(subgroup$cancel, na.rm=TRUE) == 0, 0, 1)
+}
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_id = V1)
+data.container <- data.container %>% rename(treatment_group = V2)
+
+reuter.data.p2 <- merge(reuter.data.p2, data.container, by = "city_id")
+
+```
+
+
+Getting margin_pretreat
+
+```{r}
+city.mayors <- unique(reuter.data.p2$city_mayor)
+data.container <- matrix(NA, nrow = length(city.mayors), ncol = 2)
+
+
+i<-1
+
+for(i in 1:length(city.mayors)){
+subgroup <- subset(reuter.data.p2, reuter.data.p2$city_mayor == city.mayors[i])
+subgroup.pretreat <- subset(subgroup, is.na(subgroup$cancel) == F)
+data.container[i,1] <- city.mayors[i]
+data.container[i, 2] <- ifelse(sum(subgroup$cancel, na.rm=TRUE) == 0, round(mean(subgroup$margin, na.rm=TRUE), 4),                                         round(mean(subgroup.pretreat$margin, na.rm=TRUE), 4))
+}
+
+
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_mayor = V1)
+data.container <- data.container %>% rename(margin_pretreat = V2)
+data.container <- data.container %>% mutate(margin_pretreat = as.numeric(margin_pretreat))
+
+reuter.data.p2 <- merge(reuter.data.p2, data.container, by = "city_mayor")
+
+
+data.container <- matrix(NA, nrow = nrow(reuter.data.p2), ncol = 2)
+i <- 1
+
+for(i in 1:nrow(reuter.data.p2)){
+  subgroup <- subset(reuter.data.p2, reuter.data.p2$city_id ==
+                    reuter.data.p2$city_id[i])
+  subgroup.pretreat <- subset(subgroup, is.na(subgroup$cancel) == F)
+  data.container[i, 1] <- reuter.data.p2$city_id[i]
+  data.container[i, 2] <- ifelse(is.na(reuter.data.p2$margin_pretreat[i]) ==
+                          TRUE & is.na(reuter.data.p2$cancel.year[i]) == FALSE &
+                          reuter.data.p2$year[i] > 
+                          reuter.data.p2$cancel.year[i],
+                          mean(subgroup.pretreat$margin, na.rm=TRUE),
+                          reuter.data.p2$margin_pretreat[i])
+}
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(margin_pretreat_final = V2)
+
+reuter.data.p2 <- cbind(reuter.data.p2, data.container)
+
+reuter.data.p2 <- reuter.data.p2 %>% mutate(margin_pretreat_final = ifelse(is.na(margin_pretreat_final) == TRUE, margin_pretreat, margin_pretreat_final))
+
+temp <- reuter.data.p2 %>% dplyr::select(city_id, city_mayor, year, cancel, margin, margin_pretreat, margin_pretreat_final)
+
+
+reuter.data.p2 <- reuter.data.p2 %>% dplyr::select(-V1)
+reuter.data.p2 <- reuter.data.p2 %>% dplyr::select(-margin_pretreat)
+
+###This version seems to have worked
+```
+
+
+Getting regelect_margin_pretreat
+
+```{r}
+city.mayors <- unique(reuter.data.p2$city_mayor)
+data.container <- matrix(NA, nrow = length(city.mayors), ncol = 2)
+
+
+i<-1
+
+for(i in 1:length(city.mayors)){
+subgroup <- subset(reuter.data.p2, reuter.data.p2$city_mayor == city.mayors[i])
+subgroup.pretreat <- subset(subgroup, is.na(subgroup$cancel) == F)
+data.container[i,1] <- city.mayors[i]
+data.container[i, 2] <- ifelse(sum(subgroup$cancel, na.rm=TRUE) == 0, round(mean(subgroup$regelect_margin, na.rm=TRUE), 4),
+                                                 round(mean(subgroup.pretreat$regelect_margin, na.rm=TRUE), 4))
+}
+
+
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_mayor = V1)
+data.container <- data.container %>% rename(regelect_margin_pretreat = V2)
+data.container <- data.container %>% mutate(regelect_margin_pretreat = as.numeric(regelect_margin_pretreat))
+
+reuter.data.p2 <- merge(reuter.data.p2, data.container, by = "city_mayor")
+
+
+data.container <- matrix(NA, nrow = nrow(reuter.data.p2), ncol = 2)
+i <- 1
+
+for(i in 1:nrow(reuter.data.p2)){
+subgroup <- subset(reuter.data.p2, reuter.data.p2$city_id == reuter.data.p2$city_id[i])
+subgroup.pretreat <- subset(subgroup, is.na(subgroup$cancel) == F)
+data.container[i,1] <- reuter.data.p2$city_id[i]
+data.container[i, 2] <- ifelse(is.na(reuter.data.p2$regelect_margin_pretreat[i]) == TRUE & is.na(reuter.data.p2$cancel.year[i]) == FALSE & reuter.data.p2$year[i] > reuter.data.p2$cancel.year[i], mean(subgroup.pretreat$regelect_margin, na.rm=TRUE), reuter.data.p2$regelect_margin_pretreat[i])
+}
+
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(regelect_margin_pretreat_final = V2)
+
+reuter.data.p2 <- cbind(reuter.data.p2, data.container)
+
+
+reuter.data.p2 <- reuter.data.p2 %>% mutate(regelect_margin_pretreat_final = ifelse(is.na(regelect_margin_pretreat_final) == TRUE, regelect_margin_pretreat, regelect_margin_pretreat_final))
+
+temp <- reuter.data.p2 %>% dplyr::select(city_id, city_mayor, year, cancel, regelect_margin, regelect_margin_pretreat, regelect_margin_pretreat_final)
+
+reuter.data.p2 <- reuter.data.p2 %>% dplyr::select(-regelect_margin_pretreat)
+reuter.data.p2 <- reuter.data.p2 %>% dplyr::select(-V1)
+
+```
+
+Skipping popprop for now, since it doesn't change much at all between years
+
+
+Getting a variable for mayor.startyear.pretreat (excludes appointed managers), and years.untreated
+
+```{r}
+reuter.data.p2 <- reuter.data.p2 %>% mutate(mayor.startyear.pretreat = ifelse(treated.1112 == 1 & year <= cancel.year, mayor.start.year, ifelse(treated.1112 == 1 & year > cancel.year, NA, mayor.start.year)))
+
+reuter.data.p2 <- reuter.data.p2 %>% mutate(years.untreated = ifelse(treated.1112 == 1 & year <= cancel.year, cancel.year - mayor.start.year, ifelse(treated.1112 == 1 & year > cancel.year, NA, mayor.end.year - mayor.start.year)))
+```
+
+Getting the tenure length for the mayor in office during the election
+
+```{r}
+city.ids <- unique(reuter.data.p2$city_id)
+data.container <- matrix(NA, nrow = length(city.ids), ncol = 3)
+
+i<-1
+
+for(i in 1:length(city.ids)){
+subgroup <- subset(reuter.data.p2, reuter.data.p2$city_id == city.ids[i])
+sub.2012 <- subset(subgroup, subgroup$year == 2012)
+outcome.mayor <- unique(sub.2012$mayorid)
+outcome.mayor.tenure <- 2012 - unique(sub.2012$mayor.start.year)
+
+data.container[i, 1] <- city.ids[i]
+data.container[i, 2] <- outcome.mayor
+data.container[i, 3] <- outcome.mayor.tenure
+}
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_id = V1)
+data.container <- data.container %>% rename(outcome.mayor = V2)
+data.container <- data.container %>% rename(outcome.mayor.tenure = V3)
+
+
+reuter.data.p2 <- merge(reuter.data.p2, data.container, by = "city_id")
+
+```
+
+
+Getting pre-treatment average salary
+
+```{r}
+city.mayors <- unique(reuter.data.p2$city_mayor)
+data.container <- matrix(NA, nrow = length(city.mayors), ncol = 2)
+
+
+i<-1
+
+for(i in 1:length(city.mayors)){
+subgroup <- subset(reuter.data.p2, reuter.data.p2$city_mayor == city.mayors[i])
+subgroup.pretreat <- subset(subgroup, is.na(subgroup$cancel) == F)
+data.container[i,1] <- city.mayors[i]
+data.container[i, 2] <- ifelse(sum(subgroup$cancel, na.rm=TRUE) == 0, round(mean(subgroup$lnAvgSalary, na.rm=TRUE), 4),
+                                                 round(mean(subgroup.pretreat$lnAvgSalary, na.rm=TRUE), 4))
+}
+
+
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_mayor = V1)
+data.container <- data.container %>% rename(avgsalary.pretreat.avg = V2)
+data.container <- data.container %>% mutate(avgsalary.pretreat.avg = as.numeric(avgsalary.pretreat.avg))
+
+reuter.data.p2 <- merge(reuter.data.p2, data.container, by = "city_mayor")
+
+
+data.container <- matrix(NA, nrow = nrow(reuter.data.p2), ncol = 2)
+i <- 1
+
+for(i in 1:nrow(reuter.data.p2)){
+subgroup <- subset(reuter.data.p2, reuter.data.p2$city_id == reuter.data.p2$city_id[i])
+subgroup.pretreat <- subset(subgroup, is.na(subgroup$cancel) == F)
+data.container[i,1] <- reuter.data.p2$city_id[i]
+data.container[i, 2] <- ifelse(is.na(reuter.data.p2$avgsalary.pretreat.avg[i]) == TRUE & is.na(reuter.data.p2$cancel.year[i]) == FALSE & reuter.data.p2$year[i] > reuter.data.p2$cancel.year[i], mean(subgroup.pretreat$lnAvgSalary, na.rm=TRUE), reuter.data.p2$avgsalary.pretreat.avg[i])
+}
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(avgsalary.pretreat.avg_final = V2)
+
+reuter.data.p2 <- cbind(reuter.data.p2, data.container)
+
+
+reuter.data.p2 <- reuter.data.p2 %>% mutate(avgsalary.pretreat.avg_final = ifelse(is.na(avgsalary.pretreat.avg_final) == TRUE, avgsalary.pretreat.avg, avgsalary.pretreat.avg_final))
+
+temp <- reuter.data.p2 %>% dplyr::select(city_id, city_mayor, year, cancel, lnAvgSalary, avgsalary.pretreat.avg, avgsalary.pretreat.avg_final)
+
+reuter.data.p2 <- reuter.data.p2 %>% dplyr::select(-avgsalary.pretreat.avg)
+reuter.data.p2 <- reuter.data.p2 %>% dplyr::select(-V1)
+
+```
+
+Getting regmarginXmargin_pretreat, which is a relief
+
+```{r}
+reuter.data.p2 <- reuter.data.p2 %>% mutate(regmarginXmargin_pretreat_final = margin_pretreat_final * regelect_margin_pretreat_final)
+```
+
+
+Step 5) Getting the region and election-year level variables from my data
+
+```{r}
+###Adding regionid.ch
+regionids <- read_xlsx("match-targets-combined.xlsx")
+regionids <- regionids %>% dplyr::select(regionid.ch, city_id)
+regionids$city_id <- factor(regionids$city_id)
+
+reuter.data.p2 <- merge(reuter.data.p2, regionids, by = "city_id")
+
+reuter.data.p2 <- reuter.data.p2 %>% distinct(city_id_year, .keep_all = T)  #Remove duplicates from merge
+
+
+reuter.data.p2 <- reuter.data.p2 %>% mutate(presidential = ifelse(year ==  2012, 1, 0))
+
+###Combining full data with variables from diss project
+regional.data <- read_xlsx("russia full ts data from diss.xlsx")
+
+regional.data <- regional.data %>% dplyr::select(urgov, comp.scale2, comp.scale03_18, regionid, year, ethnic.categorical)
+regional.data <- regional.data %>% rename(regionid.ch = regionid)
+regional.data <- regional.data %>% mutate(region_year = paste(regionid.ch, year, sep = "_"))
+
+reuter.data.p2 <- reuter.data.p2 %>% mutate(region_year = paste(regionid.ch, year, sep = "_"))
+reuter.data.p2 <- reuter.data.p2 %>% merge(regional.data, by = "region_year")  #This also drops out non-election years
+
+```
+
+```{r}
+write.csv(reuter.data.p2, "cleaned data full period 2_v2.csv")
+
+reuter.data.p2 <- reuter.data.p2 %>% filter(year.x >= 2011)
+write.csv(reuter.data.p2, "cleaned data 2011-2012_v2.csv")
+```
+
+##Testing CBPS procedure with this data
+
+Will be worth doing a version of this that includes opp_mayor1 as another model
+
+```{r}
+full.data <- read.csv("cleaned data 2011-2012_v2.csv")
+full.data <- full.data %>% mutate(years.since.treat = ifelse(is.na(cancel.year) == TRUE, 0, (year.x - cancel.year) + 1))
+full.data <- full.data %>% mutate(treat.weight.year = ifelse(treated.1112 == 1, treated.1112 / years.since.treat, 0))
+
+full.data <- full.data %>% mutate(nonstandardcoef.1112 = ifelse(year.x == 2011, nonstandard.coefs11, nonstandard.coefs12))
+
+full.data <- full.data %>% mutate(urcoef.1112 = ifelse(year.x == 2011, ur.coef.2011, ur.coef.2012))
+full.data <- full.data %>% mutate(ur.vs.1112 = ifelse(year.x == 2011, ur.voteshare.2011, ur.voteshare.2012))
+
+full.data <- full.data %>% mutate(years_with_elections = ifelse(is.na(cancel.year) == TRUE, year.x - 2003, year.x - cancel.year))
+#full.data.0708 <- full.data.0708 %>% mutate(treated.0708 = ifelse(is.na(cancel.year) == TRUE, 0, 1))
+
+full.data <- full.data %>% filter(year.x <= cancel.year | is.na(cancel.year) == TRUE)
+
+myvars <- c("city_id", "city_mayor", "nonstandardcoef.1112",  "treated.1112", "margin_pretreat_final", "regelect_margin_pretreat_final",
+                "ethnic.categorical",  "urgov", "urcoef.1112", "ur.vs.1112", "outcome.mayor.tenure", "mayor.tenure",
+                 "lnAvgSalary", "avgsalary.pretreat.avg_final", "poppopprop",  "unemployrate",  "dem",  "education", "presidential", "regmarginXmargin_pretreat_final")
+            #, "regmarginXmargin", "year.x", "margin", "regelect_margin", "regmargin.timeaverage", "regmarginXmargin.timeaverage")
+   
+dataset.matching <- full.data[myvars]
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.1112 <- CBPS(treated.1112 ~ margin_pretreat_final + regelect_margin_pretreat_final   +
+                        dem + mayor.tenure +
+                        poppopprop +  avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final,
+                      data=dataset.matching.complete)
+summary(cbps.out.1112)
+bal.secondround <- CBPS::balance(cbps.out.1112)
+bal.secondround
+
+pct.improvement.round2 <- abs((bal.secondround$balanced[,1] - bal.secondround$original[,1])/bal.secondround$original[,1])
+```
+
+
+Outcome model
+
+Overall UR voteshare below
+
+```{r}
+cbpsmodel1112.overall <- lm(ur.vs.1112 ~ treated.1112 + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                      lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.1112$weights,
+                      data = cbps.out.1112$data)
+summary(cbpsmodel1112.overall)
+
+```
+
+Turnout coefs below
+
+```{r}
+cbpsmodel1112.tcoef <- lm(urcoef.1112 ~ treated.1112 + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                      lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.1112$weights,
+                      data = cbps.out.1112$data)
+summary(cbpsmodel1112.tcoef)
+
+```
+
+
+Nonstandard coefs below
+
+```{r}
+cbpsmodel1112.base <- lm(nonstandardcoef.1112 ~ treated.1112 + ethnic.categorical
+                   + urgov + margin_pretreat_final + outcome.mayor.tenure +
+                      lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.1112$weights,
+                      data = cbps.out.1112$data)
+summary(cbpsmodel1112.base)
+
+
+
+coeftest.results.1112 <- coeftest(cbpsmodel1112.base, vcov = vcovCL(cbpsmodel1112.base, type="HC1", cluster = cbps.out.1112$data$city_id)) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results.1112
+```
+
+
+```{r}
+cbpsmodel1112.ys <- lm(nonstandardcoef.1112 ~ treated.1112 + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     mayor.tenure.avg + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education + opp_mayor1 +
+                     presidential + treat.weight.year,
+                      weights=cbps.out.1112$weights,
+                      data = cbps.out.1112$data)
+summary(cbpsmodel1112.ys)
+
+
+
+coeftest.results.1112.ys <- coeftest(cbpsmodel1112.ys, vcov = vcovCL(cbpsmodel1112.ys, type="HC1", cluster = cbps.out.1112$data$city_id)) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results.1112.ys
+```
+
+
+##Comparison for treated and control groups
+
+```{r}
+full.data <- full.data %>% mutate(majority_minority = ifelse(ethnic.categorical == "Majority-minority_republic", 1, 0))
+full.data <- full.data %>% mutate(non_ethnic = ifelse(ethnic.categorical == "Non-ethnic", 1, 0))
+full.data <- full.data %>% mutate(maj_rus_republic = ifelse(ethnic.categorical == "Majority_Russian_republic", 1, 0))
+
+full.data %>% group_by(treated.1112) %>% summarize(mean(UR_majority, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(comp.scale2, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(dem, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(lnAvgSalary, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(margin_pretreat_final, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(civsoc91, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(regelect_margin, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(URshare, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(mayor.tenure, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(urgov, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(pctRussian2002_new, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(majority_minority, na.rm=TRUE))
+full.data %>% group_by(treated.1112) %>% summarize(mean(non_ethnic, na.rm=TRUE))
+
+
+```
+
+Comp scale different--treated obs more likely in competitive regions
+
+Treated mayors have lower margins
+
+Treated cities have lower regional UR share
+
+Treated cities have lower tenure lengths
+
+
+
+##DiD model
+
+```{r}
+did.data <- read.csv("cleaned data full period 2_v2.csv")
+did.data <- did.data %>% mutate(years_with_elections = ifelse(is.na(cancel.year) == TRUE, year.x - 2003, year.x - cancel.year))
+
+did.data <- did.data %>% mutate(post.treatment.1112 = ifelse(year.x >= 2011, 1, 0))
+did.data <- did.data %>% mutate(treat.group.1112 = ifelse(is.na(cancel.year) == TRUE, 0, 1))
+
+coefs.all <- read.csv("all ur coefs with cityid.csv") 
+
+coefs.temp <- coefs.all %>% dplyr::select(city_id_year, pct.nonstandard, turnout, ur.voteshare)
+
+did.data <- merge(did.data, coefs.temp, by = "city_id_year")
+did.data <- did.data %>% rename(nonstandard.coef = pct.nonstandard)
+did.data <- did.data %>% rename(turnout.coef = turnout)
+
+
+```
+
+Overall UR voteshare below
+
+```{r}
+didmodel0712.overall <- lm(ur.voteshare ~ treat.group.1112 +
+                     post.treatment.1112 + treat.group.1112*post.treatment.1112 +  ethnic.categorical + urgov  +
+                     outcome.mayor.tenure + years.since.treatment +
+                     lnAvgSalary + unemployrate  +  education +
+                     presidential ,
+                   data=did.data)
+summary(didmodel0712.overall)
+```
+
+
+Turnout coefs below
+
+```{r}
+didmodel0712.tcoef <- lm(turnout.coef ~ treat.group.1112 +
+                     post.treatment.1112 + treat.group.1112*post.treatment.1112 +  ethnic.categorical + urgov  +
+                     outcome.mayor.tenure + years.since.treatment + 
+                     lnAvgSalary + unemployrate  +  education +
+                     presidential,
+                   data=did.data)
+summary(didmodel0712.tcoef)
+```
+
+
+Nonstandard coefs below
+
+```{r}
+
+didmodel0712 <- lm(nonstandard.coef ~ treat.group.1112 +
+                     post.treatment.1112 + treat.group.1112*post.treatment.1112 +  ethnic.categorical + urgov  +
+                     outcome.mayor.tenure + years.since.treatment +
+                     lnAvgSalary + unemployrate  +  education +
+                     presidential,
+                   data=did.data)
+summary(didmodel0712)
+```
+
+
+Two-way fixed effect version
+
+Overall UR voteshare below
+```{r}
+did.data <- did.data %>% mutate(time.period = ifelse(year.x <= 2008, 1, 2))
+did.data <- did.data %>% mutate(treated.dummy = treat.group.1112 * post.treatment.1112)
+twfe.period2 <- lm(ur.voteshare ~ factor(city_id) + factor(time.period) +
+                   treated.dummy + presidential + years.since.treatment, data = did.data)
+summary(twfe.period2)
+```
+
+Turnout coefs below
+
+```{r}
+twfe.period2 <- lm(turnout.coef ~ factor(city_id) + factor(time.period) +
+                   treated.dummy + presidential + years.since.treatment, data = did.data)
+summary(twfe.period2)
+```
+
+
+Nonstandard coefs below
+
+```{r}
+twfe.period2 <- lm(nonstandard.coef ~ factor(city_id) + factor(time.period) +
+                   treated.dummy + presidential + years.since.treatment, data = did.data)
+summary(twfe.period2)
+```
+
+
+##Tables
+
+```{r}
+stargazer(didmodel0308, didmodel0712, type="html", out = "did outcome models.html")
+
+stargazer(cbpsmodel0708.base, cbpsmodel1112.base, type="html", out = "cbps outcome models.html")
+```
+
+
+Quick look at parellel trends
+
+```{r}
+data2007 <- did.data %>% filter(year.x == 2007)
+data2008 <- did.data %>% filter(year.x == 2008)
+data2011 <- did.data %>% filter(year.x == 2011)
+data2012 <- did.data %>% filter(year.x == 2012)
+
+
+data2007 %>% group_by(treat.group.1112) %>% summarise(mean(nonstandard.coef, na.rm=TRUE))
+
+data2008 %>% group_by(treat.group.1112) %>% summarise(mean(nonstandard.coef, na.rm=TRUE))
+
+data2011 %>% group_by(treat.group.1112) %>% summarise(mean(nonstandard.coef, na.rm=TRUE))
+
+data2012 %>% group_by(treat.group.1112) %>% summarise(mean(nonstandard.coef, na.rm=TRUE))
+
+data.means <- matrix(NA, nrow = 8, ncol = 3)
+data.means[,1] <- c(2007, 2007, 2008, 2008, 2011, 2011, 2012, 2012)
+data.means[,2] <- rep.int(c(0,1), times= 4)
+data.means[,3] <- c(.48, .5047, .364, .4108, .3946, .4079, .4569, .4185)
+
+data.means <- as_tibble(data.means)
+data.means <- data.means %>% rename(year = V1)
+data.means <- data.means %>% rename(treated = V2)
+data.means <- data.means %>% rename(nonstandard.avg = V3)
+
+ggplot(data.means, aes(x = year, y = nonstandard.avg, color = factor(treated))) + geom_line() + geom_point() + theme_bw()
+
+```
+
+###Testing missingness at random
+
+```{r}
+contains.missing <- matrix(NA, nrow=nrow(dataset.matching))
+i<- 1
+for (i in 1:nrow(dataset.matching)){
+  contains.missing[i] <- ifelse(anyNA(dataset.matching[i,]) == TRUE, 1, 0)
+}
+
+dataset.matching <- cbind(dataset.matching, contains.missing)
+
+testmodel <- glm(contains.missing ~ treated.1112, data = dataset.matching)
+summary(testmodel)
+```
+

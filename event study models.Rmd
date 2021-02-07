@@ -1,9 +1,14 @@
 ---
-title: "R Notebook"
+title: "Event study models"
 output: html_notebook
 ---
 
-##Setup and balance##
+##Summary
+
+Findings are variable by election type. Treatment appears to reduce manipulation levels for presidential elections. This is consistent across Callaway and Sant'Anna models and standard dynamic models included on this page, when presidential and legislative elections are modeled separately (for consistency with C&S models, which require this). C&S models break out effects for cohorts, and show that the effect for legislative elections is driven by the early cohort. For presidential elections the effect is seen in both cohorts, but is strongest in the later cohort.
+
+
+##Setup
 
 ```{r setup}
 library(readxl)
@@ -14,14 +19,17 @@ library(sandwich)
 library(ggplot2)
 library(stargazer)
 library(interplot)
+library(fastDummies)
 library(eventStudy)
 library(data.table)
+library(ggeffects)
 library(cobalt) #Balance; very useful package
 ```
 
+##Data
 
 ```{r}
-full.data <- read.csv("cleaned data full all years.csv")
+full.data <- read.csv("cleaned data full all years_v2.csv")
 
 full.data <- full.data %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
 
@@ -75,6 +83,7 @@ full.data <-
     group_by(city_id) %>%
     mutate(lag.manipulation = dplyr::lag(turnout.coef, n = 1, default = NA)) #Lagging manipulation
 
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(opp_mayor1 == 1, 1, 0))
 ```
 
 Creating relative treatment counter using time.period instead of calendar time
@@ -91,8 +100,8 @@ Treatment period should collapse to the previous election time. I.e. elections c
 ```{r}
 full.data <- full.data %>% mutate(cancel.period = ifelse(is.na(cancel.year) == TRUE, NA, ifelse(
   cancel.year < 2007, 3, ifelse(
-    cancel.year == 2007, 4, ifelse(
-      cancel.year > 2007 & cancel.year < 2011, 5, ifelse(
+    cancel.year == 2007, 5, ifelse(
+      cancel.year > 2007 & cancel.year <= 2011, 5, ifelse(
         cancel.year == 2011, 6, NA
       )
     ) 
@@ -137,6 +146,11 @@ full.data <- full.data %>%
          ethnic.categorical2 = paste0("ethcat", ethnic.categorical2)) %>%
   spread(ethnic.categorical2, value, fill = 0)
 
+
+##Years before and after treatment
+
+full.data <- full.data %>% mutate(years.after.treatment.factor = ifelse(is.na(cancel.year)==T, -1, year.x - cancel.year))
+#full.data <- dummy_cols(full.data, select_columns = "years.after.treatment.factor")
 ```
 
 
@@ -190,6 +204,8 @@ multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
 }
 ```
 
+
+##Testing balance
 
 ```{r}
 ###Untreated vs. early treated
@@ -252,103 +268,141 @@ multiplot(p.bal.urc07.2, p.bal.urc08.2, p.bal.urvs07.2, p.bal.urvs08.2, cols= 2)
 ```
 
 
-##Main 2WFE models, fraud
+##Presidential vs legislative data
 
-```{r baseline model}
-full.data <- full.data %>% mutate(treat.cohort = relevel(treat.cohort, ref = "Inf"))
-
-twfe.tc.v2.fac <- lm(turnout.coef ~   mayor.tenure + urgov +  lnAvgSalary +
-                       unemployrate  +  education  + poppopprop  + factor(treat.cohort)*treat + years.since.treat, 
-                     data = full.data)
-summary(twfe.tc.v2.fac)
-```
-
-```{r baseline with lagged manipulation}
-twfe.tc.v2.fac.lag <- lm(turnout.coef ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov +  lnAvgSalary +
-                       unemployrate  +  education  + poppopprop + lag.manipulation + factor(years.since.treat), 
-                     data = full.data)
-summary(twfe.tc.v2.fac.lag)
+```{r}
+data.pres <- full.data %>% filter(presidential == 1)
+data.pres <- data.pres %>% mutate(election.period = ifelse(year.x == 2004, 1, ifelse(year.x == 2008, 2, 3)))
+data.pres <- data.pres %>%  mutate(cancel.period = ifelse(is.na(cancel.year) == TRUE, NA, ifelse(
+  cancel.year <= 2007, 2, 3)))
+data.pres <- data.pres %>% mutate(rel.treat.time = ifelse(is.na(cancel.period) == T, -1, election.period - cancel.period))
+data.pres <- dummy_cols(data.pres, select_columns = "rel.treat.time")
 ```
 
 
-```{r baseline with square term}
-twfe.tc.v2.sqr <- lm(turnout.coef ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov +  lnAvgSalary +
-                       unemployrate  +  education  + poppopprop  + years.since.treat + I(years.since.treat^2), 
-                     data = full.data)
-summary(twfe.tc.v2.sqr)
+```{r}
+data.parl <- full.data %>% filter(presidential == 0)
+data.parl <- data.parl %>% mutate(election.period = ifelse(year.x == 2003, 1, ifelse(year.x == 2007, 2, 3)))
+data.parl <- data.parl %>%  mutate(cancel.period = ifelse(is.na(cancel.year) == TRUE, NA, ifelse(
+  cancel.year < 2007, 2, 3)))
+data.parl <- data.parl %>% mutate(rel.treat.time = ifelse(is.na(cancel.period) == T, -1, election.period - cancel.period))
+data.parl <- dummy_cols(data.parl, select_columns = "rel.treat.time")
+```
 
-ggplot(subset(full.data, full.data$presidential == 0), aes(years.since.treat, ur.voteshare, color = factor(treat.cohort))) +
+##Models
+
+###Baseline models
+
+```{r}
+model.tc.dyn <- lm(turnout.coef ~ factor(city_id) + presidential + years.since.treatment + I(years.since.treatment^2) 
+                   + urgov + mayor.tenure + lnAvgSalary, data = test)
+summary(model.tc.dyn)
+
+dat <- ggpredict(model.tc.dyn, terms = "years.since.treatment")
+
+ggplot(dat, aes(x, predicted)) + 
+  geom_line() +
   geom_point() +
-stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1)
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha = .1)
 ```
 
 
-###Main 2WFE models, UR voteshare
+Manipulation overall
 
 ```{r}
-twfe.ur.v3 <- lm(ur.voteshare ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + lnAvgSalary +
-                       unemployrate  +  education + factor(years.since.treat) + turnout.coef, data = full.data)
-summary(twfe.ur.v3)
+model.tc.dyn.parl <- lm(nonstandard.coef ~ factor(city_id) + factor(year.x) + `rel.treat.time_-2` +  
+                        `rel.treat.time_0` + rel.treat.time_1 
+                   + urgov + years.since.treatment + mayor.tenure + lnAvgSalary + dem, data = data.parl)
+summary(model.tc.dyn.parl)
 ```
 
-###Tables
-
 ```{r}
-stargazer(twfe.tc.v2.fac, twfe.tc.v2.fac.lag, twfe.ur.v3, type="html", omit = c("city_id", "year.x"), out="table_main.html")
+model.tc.dyn.pres <- lm(nonstandard.coef ~ factor(city_id) + factor(year.x) + `rel.treat.time_-2` +  
+                        `rel.treat.time_0` + rel.treat.time_1 
+                   + urgov + years.since.treatment + mayor.tenure + lnAvgSalary + dem, data = data.pres)
+summary(model.tc.dyn.pres)
+
 ```
 
-###Event study framework
-
-Classic 'dynamic' model:
-
-Manipulation
 
 ```{r}
-model.tc.dyn <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  `rel.time-4` +
+model.tc.dyn.all <- lm(nonstandard.coef ~ factor(city_id) + presidential + `rel.time-4` + `rel.time-3` + `rel.time-2` +  
+                        `rel.time0` + rel.time1 + rel.time2 + rel.time3
+                   + urgov + years.since.treatment + mayor.tenure  + lnAvgSalary + dem, data = full.data)
+summary(model.tc.dyn.all)
+
+```
+
+###UR voteshare
+
+
+
+```{r}
+model.ur.dyn.parl <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + `rel.treat.time_-2` +  
+                        `rel.treat.time_0` + rel.treat.time_1 
+                   + urgov + years.since.treatment + mayor.tenure + lnAvgSalary + dem + turnout.coef, data = data.parl)
+summary(model.ur.dyn.parl)
+
+```
+
+
+```{r}
+model.ur.dyn.pres <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + `rel.treat.time_-2` +  
+                        `rel.treat.time_0` + rel.treat.time_1 
+                   + urgov + years.since.treatment + mayor.tenure + lnAvgSalary + dem + turnout.coef, data = data.pres)
+summary(model.ur.dyn.pres)
+
+```
+
+```{r}
+model.ur.dyn.all <- lm(ur.voteshare ~ factor(city_id) + presidential + `rel.time-4` + `rel.time-3` + `rel.time-2` +  
+                        `rel.time0` + rel.time1 + rel.time2 + rel.time3
+                   + urgov + years.since.treatment + mayor.tenure + lnAvgSalary + dem + turnout.coef, data = full.data)
+summary(model.ur.dyn.all)
+
+```
+
+
+Manipulation plot
+```{r}
+coefs.homog <- broom::tidy(model.tc.dyn.all, conf.int = TRUE, conf.level = .95)
+coefs.homog.select <- coefs.homog[131:137,]
+coefs.homog.select <- coefs.homog.select %>% mutate(rel.time = c(-4, -3, -2, -1, 1, 2, 3))
+new.row <- c(rep(NA, 6), 0)
+coefs.homog.select <- rbind(coefs.homog.select, new.row)
+
+att.plot.tc <- ggplot(coefs.homog.select, aes(x = rel.time, y = estimate)) + geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + labs(title = "OLS estimates of relative time to treatment\n (95% confidence intervals)", x = "Time to treatment", y = "Estimate") + theme_bw()
+
+```
+
+Vote-share plot
+```{r}
+coefs.homog <- broom::tidy(model.ur.dyn, conf.int = TRUE, conf.level = .95)
+coefs.homog.select <- coefs.homog[131:137,]
+coefs.homog.select <- coefs.homog.select %>% mutate(rel.time = c(-4, -3, -2, -1, 1, 2, 3))
+new.row <- c(rep(NA, 6), 0)
+coefs.homog.select <- rbind(coefs.homog.select, new.row)
+
+att.plot.ur <- ggplot(coefs.homog.select, aes(x = rel.time, y = estimate)) + geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + labs(title = "OLS estimates of relative time to treatment\n (95% confidence intervals)", x = "Time to treatment", y = "Estimate") + theme_bw()
+
+```
+
+###With lagged manipulation
+
+Manipulation overall
+```{r}
+model.tc.dyn2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x)  +  `rel.time-4` +
                         `rel.time-3` + `rel.time-2` + `rel.time-1` + rel.time1 + rel.time2 + rel.time3 
                    + urgov + mayor.tenure + lag.manipulation, data = full.data)
-summary(model.tc.dyn)
+summary(model.tc.dyn2)
 ```
 
-United Russia:
-
+UR voteshare
 ```{r}
-model.ur.dyn <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + `rel.time-5` + `rel.time-4` +
+model.ur.dyn2 <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + `rel.time-4` +
                         `rel.time-3` + `rel.time-2` + `rel.time-1` + rel.time1 + rel.time2 + rel.time3 
-                   + urgov + mayor.tenure + turnout.coef, data = full.data)
-summary(model.ur.dyn)
+                   + urgov + mayor.tenure + turnout.coef + lag.manipulation, data = full.data)
+summary(model.ur.dyn2)
 ```
-
-Table
-
-```{r include = FALSE}
-stargazer(model.tc.dyn, model.ur.dyn, type="html", omit = "factor", out="table_app_eventstudy.html")
-```
-
-Plot
-
-```{r}
-coefs.homog <- tidy(model.tc.dyn, conf.int = TRUE, conf.level = .90)
-coefs.homog.select <- coefs.homog[129:136,]
-coefs.homog.select <- coefs.homog.select %>% mutate(rel.time = c(-5, -4, -3, -2, -1, 1, 2, 3))
-new.row <- c(rep(NA, 7), 0)
-coefs.homog.select <- rbind(coefs.homog.select, new.row)
-
-att.plot <- ggplot(coefs.homog.select, aes(x = rel.time, y = estimate)) + geom_point() +
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + labs(title = "OLS estimates of relative time to treatment\n (90% confidence intervals)", x = "Time to treatment", y = "Estimate") + theme_bw()
-
-```
-
-
-```{r}
-coefs.homog <- tidy(model.ur.dyn, conf.int = TRUE, conf.level = .90)
-coefs.homog.select <- coefs.homog[129:136,]
-coefs.homog.select <- coefs.homog.select %>% mutate(rel.time = c(-5, -4, -3, -2, -1, 1, 2, 3))
-new.row <- c(rep(NA, 7), 0)
-coefs.homog.select <- rbind(coefs.homog.select, new.row)
-
-att.plot <- ggplot(coefs.homog.select, aes(x = rel.time, y = estimate)) + geom_point() +
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + labs(title = "OLS estimates of relative time to treatment\n (90% confidence intervals)", x = "Time to treatment", y = "Estimate") + theme_bw()
-
-```
-

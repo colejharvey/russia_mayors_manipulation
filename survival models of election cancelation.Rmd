@@ -1,0 +1,27 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+```
+
+
+Converting data for survival models
+
+Goal is a dataset with as many rows as their are cities, with DV as time.to.treatment, and other city-level variables as covariates.
+-2004 urvoteshare, nonstandard coef and turnout coef
+-Average mayor margin?
+-poppopprop + lnAvgSalary + civsoc91 + 
+-opp_mayor1? 
+
+One way to to do this could be by election period.
+I.e., did you have an opposition mayor during that period or no? 
+
+```{r}
+reuter.data <- read.csv("reuter_et_al_data_v3.csv")
+reuter.data <- reuter.data %>% mutate(time.to.treatment = ifelse(is.na(cancel.year) == T, 13, cancel.year-1999))
+
+```
+

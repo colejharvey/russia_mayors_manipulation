@@ -1,0 +1,278 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(interactions)
+library(stargazer)
+library(fastDummies)
+#full.data <- read.csv("cleaned data full all years_v2.csv")
+
+full.data <- read.csv("coefs with city covariates cleaned.csv")
+#absentee <- read.csv("absentee coefficients.csv")
+#absentee <- absentee %>% dplyr::select(pct.absentee, city_id_year)
+#full.data <- merge(full.data, absentee, by = "city_id_year")
+
+#Note: Missing cities are manually added to full.data file
+
+full.data <- full.data %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+full.data <- full.data %>% mutate(appointed.exec = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x >= cancel.year, 1, 0)))
+full.data <- full.data %>% rename(turnout.coef = turnout)
+
+full.data <- full.data %>% mutate(years.with.elections = ifelse(is.na(cancel.year)==T, year.x-1996, ifelse(year.x - cancel.year < 0, year.x - 1996, cancel.year - 1996))) #This gives a measure of early vs late vs. control; 1996 bc this is when local elections first took place 
+
+full.data <- full.data %>% mutate(years.post.treatment = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x - cancel.year < 0, 0, year.x - cancel.year)))
+full.data <- full.data %>% mutate(years.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2007 & year.x ==2007, 1, years.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+full.data <- full.data %>% mutate(years.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2011 & year.x ==2011, 1, years.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+
+full.data <- full.data %>% mutate(treated.post.treatment = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x - cancel.year < 0, 0, 1)))
+full.data <- full.data %>% mutate(treated.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2007 & year.x ==2007, 1, treated.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+full.data <- full.data %>% mutate(treated.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2011 & year.x ==2011, 1, treated.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+
+
+full.data <- full.data %>% mutate(years.under.appt = ifelse(is.na(cancel.year) == T, 0, ifelse(year.x - cancel.year < 0, 0, ifelse(year.x == 2007 | year.x == 2011 & year.x == cancel.year, 1, year.x - cancel.year))))
+
+full.data <- full.data %>% mutate(city_id_factor = as.factor(city_id))
+
+
+full.data <- full.data %>% mutate(treatment.group = ifelse(is.na(cancel.year)==F, 1, 0))
+
+full.data <- full.data %>% mutate(control = ifelse(is.na(cancel.year)==T, 1, 0))
+full.data <- full.data %>% mutate(early.treated = ifelse(is.na(cancel.year)==F & cancel.year <= 2007, 1, 0))
+full.data <- full.data %>% mutate(late.treated = ifelse(is.na(cancel.year)==F & cancel.year > 2007, 1, 0))
+
+
+full.data <- full.data %>% mutate(years.under.regime = ifelse(appointed.exec == 0, year.x - 2000, year.x - cancel.year))
+
+##Dummies for ethnic categorical
+
+full.data <- dummy_cols(full.data, select_columns = "ethnic.categorical")
+full.data <- full.data %>% rename(majority.russian.republic = ethnic.categorical_Majority_Russian_republic)
+full.data <- full.data %>% rename(majority.minority.republic = `ethnic.categorical_Majority-minority_republic`)
+
+```
+
+##Overall manipulation
+
+```{r}
+model.tc <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + margin.most.recent +  appointed.exec*years.under.regime, data = full.data)
+#summary(model.tc)
+#sjPlot::plot_model(model.tc, type = "int", show.data = T, jitter = .25)
+#sjPlot::plot_model(model.tc, type = "pred", terms = c("years.with.elections", "years.under.appt"), show.data = T, jitter = .25)
+
+interactions::interact_plot(model.tc, pred = appointed.exec, modx = years.under.regime, interval = TRUE, modx.values = c(7, 16)) #Interpreting this plot: untreated at 16 years = control, treated at 16 = late treated, otherwise early treatment group untreated and post-treatment
+interactions::interact_plot(model.tc, pred = years.under.regime, modx = appointed.exec, interval = TRUE, 
+                            legend.main = "Appointed executive", x.label = "Years under selection regime",
+                            y.label = "Overall manipulation")
+p.tc <- sim_slopes(model.tc, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE) 
+p.tc.image <- p.tc$jnplot
+p.tc.image + labs(title = NULL) + xlab("Years under regime") + ylab("Slope of 'appointed executive'")
+
+model.tc2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  urgov + margin.most.recent +
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 +  known.opp.mayor + years.under.regime +
+                 appointed.exec, data = full.data)
+#summary(model.tc2)
+#sjPlot::plot_model(model.tc2, type = "int", show.data = T)
+#sim_slopes(model.tc2, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+
+
+model.tc.base <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      appointed.exec, data = full.data)
+#summary(model.tc.base)
+
+p.tc.base <- sjPlot::plot_model(model.tc.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent",  "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                      "appointed.exec", "years.under.regime")) + ylim(-.2, 1.5) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.base
+
+p.tc.2 <- sjPlot::plot_model(model.tc2, terms = c("urgov", "margin.most.recent", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                      "appointed.exec", "years.under.regime")) + ylim(-.2, .45) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.2
+```
+
+
+
+
+##Nonstandard coef
+
+```{r}
+model.ns <- lm(nonstandard.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + appointed.exec*years.under.regime, data = full.data %>% filter(nonstandard.coef > -2))
+#summary(model.ns)
+sjPlot::plot_model(model.ns, type = "pred", terms = c("years.under.regime", "appointed.exec"), show.data = T, jitter = .25)
+interactions::interact_plot(model.ns, pred = appointed.exec, modx = years.under.regime, interval = TRUE, modx.values = c(0, 12)) #Interpreting this plot: untreated at 16 years = control, treated at 16 = late treated, otherwise early treatment group untreated and post-treatment
+sim_slopes(model.ns, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
+
+
+model.ns2 <- lm(nonstandard.coef ~ city_id_factor + factor(year.x) +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + years.under.appt*years.with.elections, data = full.data %>% filter(nonstandard.coef > -2))
+#summary(model.ns2)
+sim_slopes(model.ns2, pred = years.under.appt, modx = years.with.elections, jnplot = TRUE)
+
+
+model.ns.base <- lm(nonstandard.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + years.under.appt + margin.mostrecent + years.with.elections, data = full.data %>% filter(nonstandard.coef > -2))
+
+p.ns.base <- sjPlot::plot_model(model.ns.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov",  "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                      "years.under.appt", "years.with.elections", "years.under.appt")) + ylim(-.2, .75)
+p.ns.base
+```
+
+##UR voteshare
+
+
+```{r}
+model.ur <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + margin.most.recent + 
+                 mayor.tenure +  lnAvgSalary + dem + majority.russian.republic + majority.minority.republic + known.opp.mayor + turnout.coef + appointed.exec*years.under.regime, data = full.data)
+#summary(model.ur)
+sjPlot::plot_model(model.ur, type = "int", show.data = T, jitter = .25)
+sjPlot::plot_model(model.ur, type = "pred", terms = c("years.under.regime", "appointed.exec"), show.data = T, jitter = .25)
+
+interactions::interact_plot(model.ur, pred = appointed.exec, modx = years.under.regime, interval = TRUE, modx.values = c(7, 16)) #Interpreting this plot: untreated at 16 years = control, treated at 16 = late treated, otherwise early treatment group untreated and post-treatment
+interactions::interact_plot(model.ur, pred = years.under.regime, modx = appointed.exec, interval = TRUE)
+
+p.ur <- sim_slopes(model.ur, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE) 
+p.ur.image <- p.ur$jnplot
+p.ur.image + labs(title = NULL) + xlab("Years under regime") + ylab("Slope of 'appointed executive'")
+
+
+model.ur2 <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) +   urgov + margin.most.recent +appointed.exec + years.under.regime + mayor.tenure  + lnAvgSalary + dem + comp.scale2 + known.opp.mayor + turnout.coef, data = full.data)
+#summary(model.ur2)
+sjPlot::plot_model(model.ur2, type = "int")
+
+model.ur.base <- lm(ur.voteshare ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo + urgov  + margin.most.recent + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + 
+                      appointed.exec + years.under.regime + turnout.coef, data = full.data)
+#summary(model.ur.base)
+p.ur.base <- sjPlot::plot_model(model.ur.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent",  "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                       "appointed.exec", "years.under.regime", "turnout.coef")) +
+  ylim(-.1, .5) + labs(title = "United Russia vote-share") + geom_hline(yintercept=0) + theme_bw()
+p.ur.base
+
+p.ur.2 <- sjPlot::plot_model(model.ur2, terms = c("urgov", "margin.most.recent", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                       "appointed.exec", "years.under.regime", "turnout.coef")) +
+  ylim(-.1, .5) + labs(title = "United Russia vote-share") + geom_hline(yintercept=0) + theme_bw()
+p.ur.2
+```
+
+
+##Table
+
+```{r}
+stargazer(model.tc.base, model.tc2, model.ur.base, model.ur2, type = "html", digits = 2, omit = "factor", out = "table_main.html")
+```
+
+##Multiplot
+
+```{r}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+##Plotting
+
+```{r}
+png(filename = "coefplot multiple.png", width = 7, height = 5, res = 500, units = "in")
+multiplot(p.tc.base, p.tc.2, cols = 1)
+dev.off()
+
+png(filename = "turnout multiple.png", width = 7, height = 5, res = 500, units = "in")
+multiplot(p.ur.base, p.ur.2, cols = 1)
+dev.off()
+```
+
+
+##Absentee
+
+```{r}
+model.abs <- lm(pct.absentee ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +
+                 treated.post.treatment*years.with.elections, data = full.data)
+summary(model.abs)
+sjPlot::plot_model(model.abs, type = "int")
+interactions::interact_plot(model.abs, pred = treated.post.treatment, modx = years.with.elections, interval = TRUE, modx.values = c(7, 16)) #Interpreting this plot: untreated at 16 years = control, treated at 16 = late treated, otherwise early treatment group untreated and post-treatment
+sim_slopes(model.abs, pred = treated.post.treatment, modx = years.with.elections, jnplot = TRUE)
+
+
+
+model.abs2 <- lm(pct.absentee ~ factor(city_id) + factor(year.x) +   urgov + years.since.treatment*appointed.exec + mayor.tenure  + lnAvgSalary + dem + comp.scale2 + turnout.coef, data = full.data)
+summary(model.abs2)
+sjPlot::plot_model(model.abs2, type = "int")
+```
+
+###Robustness checks
+
+Effect of transitions within both regime types
+
+```{r}
+full.data <- full.data %>% mutate(mayor.tenure.sq = mayor.tenure^2)
+
+model.tc.tenure <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec*mayor.tenure + appointed.exec*mayor.tenure.sq, data = full.data)
+
+sjPlot::plot_model(model.tc.tenure, type = "pred", terms = c("mayor.tenure", "mayor.tenure.sq", "appointed.exec"))
+
+model.tc.base <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec + mayor.tenure, data = full.data)
+
+stargazer::stargazer(model.tc.base, model.tc.tenure, type = "text", omit="city_id")
+```
+
+```{r}
+model.ur.tenure <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec*mayor.tenure + appointed.exec*mayor.tenure.sq + turnout.coef, data = full.data)
+
+model.ur.base <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec + mayor.tenure + turnout.coef, data = full.data)
+
+stargazer::stargazer(model.ur.base, model.ur.tenure, type = "text", omit="city_id")
+
+###All four models for appendix
+
+stargazer::stargazer(model.tc.base, model.tc.tenure, model.ur.base, model.ur.tenure, type = "html", omit="city_id", out = "table_app_mayortenure.html")
+```

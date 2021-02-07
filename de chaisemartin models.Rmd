@@ -1,0 +1,64 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(interactions)
+library(ggplot2)
+library(stargazer)
+library(eventStudy)
+library(fastDummies)
+library(DIDmultiplegt)
+
+full.data <- read.csv("coefs with city covariates cleaned.csv")
+```
+
+##Data transformations
+
+
+```{r}
+full.data <- full.data %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+full.data <- full.data %>% rename(turnout.coef = turnout)
+
+##Year and country factors
+
+full.data <- full.data %>% mutate(city_id_factor = as.factor(city_id))
+full.data <- full.data %>% mutate(year_factor = as.factor(year.x))
+
+##Explanatory variables for OLS
+full.data <- full.data %>% mutate(appointed.exec = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x >= cancel.year, 1, 0)))
+full.data <- full.data %>% mutate(years.under.regime = ifelse(appointed.exec == 0, year.x - 2000, year.x - cancel.year))
+
+full.data <- full.data %>% mutate(years.with.elections = ifelse(is.na(cancel.year)==T, year.x-1996, ifelse(year.x - cancel.year < 0, year.x - 1996, cancel.year - 1996))) #This gives a measure of early vs late vs. control; 1996 bc this is when local elections first took place 
+
+
+##Adjusting treatment year to push treatments in 2008 and 2012 to the next year (so they do not affect elections in those years)
+
+full.data <- full.data %>% mutate(cancel.year.adj = ifelse(cancel.year == 2004, 2005,
+                                                    ifelse(cancel.year == 2008, 2009, 
+                                                    ifelse(cancel.year == 2012, NA, cancel.year))))
+full.data <- full.data %>% mutate(cancel.year.adj = as.integer(cancel.year.adj))
+
+##Dummies for ethnic categorical
+
+full.data <- dummy_cols(full.data, select_columns = "ethnic.categorical")
+full.data <- full.data %>% rename(majority.russian.republic = ethnic.categorical_Majority_Russian_republic)
+full.data <- full.data %>% rename(majority.minority.republic = `ethnic.categorical_Majority-minority_republic`)
+
+##Known opp mayor
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+
+full.data <- full.data %>% mutate(treated = ifelse(is.na(cancel.year.adj)== T, 0, ifelse(year.x < cancel.year.adj, 0, 1)))
+```
+
+```{r}
+did_multiplegt(df = full.data, Y = "ur.voteshare", G = "city_id", T = "year.x", D = "treated", controls = c("urgov", "dem", "mayor.tenure", "turnout.coef"), placebo = 2, brep = 2, dynamic = 3)
+```
+
+```{r}
+did_multiplegt(df = full.data, Y = "turnout.coef", G = "city_id", T = "year.x", D = "treated", controls = c("urgov", "dem", "mayor.tenure"), placebo = 2, brep = 2, dynamic = 3)
+```
+

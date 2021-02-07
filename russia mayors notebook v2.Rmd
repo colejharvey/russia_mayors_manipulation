@@ -1,0 +1,251 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Data is still screwy for the 2011/2012 setup; shows only 8 treated observations. Not sure where they're getting lost. Try tracing it once more, and then next action could be to do two separate data processes.
+full.data1112 is only getting cancel.year == 2011; where is that going wrong?
+
+The problem is early on (line 32ish) when we remove years after treatment
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(CBPS)
+library(lmtest)  #Getting clustered sEs 
+library(sandwich)
+library(ggplot2)
+library(stargazer)
+reuter.data <- read.csv("reuter_et_al_data_v2.csv")
+full.data <- read.csv("coefs with city covariates plus city_mayor.csv")
+full.data <- full.data %>% mutate(nonstandard.coef = round(pct.nonstandard, digits = 4))
+full.data <- full.data %>% dplyr::select(-pct.nonstandard)
+
+full.data <- full.data %>% mutate(treated.0708 = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year <= 2007, 1, 0)))
+full.data <- full.data %>% mutate(treated.1112 = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year >= 2007 & cancel.year <= 2011, 1, 0)))
+
+```
+
+##Data setup
+No need to run the below code unless changing underlying data
+
+```{r}
+reuter.data <- reuter.data %>% mutate(city_mayor = factor(paste(PositionCity, mayorid, sep = "_")))
+reuter.data.temp <- reuter.data %>% filter(is.na(cancel.year)==TRUE | year <= cancel.year)
+by.city_mayor <- reuter.data.temp %>% group_by(city_mayor)
+salary.timeaverages <- by.city_mayor %>% summarize(mean(lnAvgSalary, na.rm=TRUE))
+popprop.timeaverages <- by.city_mayor %>% summarize(mean(poppopprop, na.rm=TRUE))
+regmargin.timeaverages <- by.city_mayor %>% summarize(mean(regelect_margin, na.rm=TRUE))
+
+timeaverages <- merge(salary.timeaverages, popprop.timeaverages, by = "city_mayor")
+timeaverages <- merge(timeaverages, regmargin.timeaverages, by = "city_mayor")
+
+reuter.data <- reuter.data %>% left_join(timeaverages, by = "city_mayor")
+reuter.data <- reuter.data %>% rename(logsalary.timeaverage = "mean(lnAvgSalary, na.rm = TRUE)")
+reuter.data <- reuter.data %>% rename(popprop.timeaverage = "mean(poppopprop, na.rm = TRUE)")
+reuter.data <- reuter.data %>% rename(regmargin.timeaverage = "mean(regelect_margin, na.rm = TRUE)")
+
+reuter.data <- reuter.data %>% mutate(regmarginXmargin.timeaverage = regmargin.timeaverage * margin)
+
+coefs.all <- read.csv("all nonstandard coefs with cityid.csv") 
+coefs.all <- coefs.all %>% rename(city_id_year = "ï..city_id_year")
+
+coefs.only <- coefs.all %>% dplyr::select(city_id_year, city_id, pct.nonstandard, year)
+coefs.2007 <- coefs.only %>% filter(year == 2007)
+coefs.2008 <- coefs.only %>% filter(year == 2008)
+coefs.2011 <- coefs.only %>% filter(year == 2011)
+coefs.2012 <- coefs.only %>% filter(year == 2012)
+
+coefs.2007 <- coefs.2007 %>% rename(nonstandard.coefs07 = pct.nonstandard)
+coefs.2008 <- coefs.2008 %>% rename(nonstandard.coefs08 = pct.nonstandard)
+coefs.2011 <- coefs.2011 %>% rename(nonstandard.coefs11 = pct.nonstandard)
+coefs.2012 <- coefs.2012 %>% rename(nonstandard.coefs12 = pct.nonstandard)
+
+coefs.2007 <- coefs.2007 %>% dplyr::select(nonstandard.coefs07, city_id)
+coefs.2008 <- coefs.2008 %>% dplyr::select(nonstandard.coefs08, city_id)
+coefs.2011 <- coefs.2011 %>% dplyr::select(nonstandard.coefs11, city_id)
+coefs.2012 <- coefs.2012 %>% dplyr::select(nonstandard.coefs12, city_id)
+
+
+
+reuter.data <- merge(reuter.data, coefs.2007, by = "city_id")
+reuter.data <- merge(reuter.data, coefs.2008, by = "city_id")
+reuter.data <- merge(reuter.data, coefs.2011, by = "city_id")
+reuter.data <- merge(reuter.data, coefs.2012, by = "city_id")
+
+```
+
+```{r}
+#coefs.all <- read.csv("all nonstandard coefs with cityid.csv") 
+#coefs.all <- coefs.all %>% rename(city_id_year = "ï..city_id_year")
+full.data <- coefs.all %>% merge(reuter.data, by="city_id_year")
+
+
+###Adding regionid.ch
+regionids <- read_xlsx("match-targets-combined.xlsx")
+regionids <- regionids %>% dplyr::select(regionid.ch, city_id)
+regionids$city_id <- factor(regionids$city_id)
+
+full.data <- full.data %>% rename(city_id = city_id.x)
+full.data$city_id <- factor(full.data$city_id)
+full.data <- full.data %>% merge(regionids, by = "city_id")
+
+full.data <- full.data %>% distinct(city_id_year, .keep_all = T)  #Remove duplicates from merge
+
+###Determining treatment status by year
+full.data <- full.data %>% mutate(treat.group.07 = ifelse(is.na(cancel.year) == TRUE, 0, 
+                                                          ifelse(cancel.year < 2007, 1, 0)))  #TG if elections canceled in 04/05/06
+full.data <- full.data %>% mutate(treat.group.08 = ifelse(is.na(cancel.year) == TRUE, 0, 
+                                                          ifelse(cancel.year == 2007, 1, 0))) #TG if elections canceled in 04/05/06/07
+
+full.data <- full.data %>% mutate(treat.group.11 = ifelse(is.na(cancel.year) == TRUE, 0, 
+                                                          ifelse(cancel.year > 2007 & cancel.year < 2011, 1, 0)))  #TG if canceled in 08/09/10
+
+full.data <- full.data %>% mutate(treat.group.12 = ifelse(is.na(cancel.year) == TRUE, 0, 
+                                                          ifelse(cancel.year == 2011, 1, 0)))  #TG if canceled in 08/09/10
+
+
+full.data <- full.data %>% mutate(posttreat.07 = ifelse(year.x >= 2007, 1, 0))
+full.data <- full.data %>% mutate(posttreat.08 = ifelse(year.x >= 2008, 1, 0))
+full.data <- full.data %>% mutate(posttreat.11 = ifelse(year.x >= 2011, 1, 0))
+full.data <- full.data %>% mutate(posttreat.12 = ifelse(year.x >= 2012, 1, 0))
+
+full.data <- full.data %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
+
+###Combining full data with variables from diss project
+regional.data <- read_xlsx("russia full ts data from diss.xlsx")
+
+regional.data <- regional.data %>% dplyr::select(urgov, comp.scale2, comp.scale03_18, regionid, year, ethnic.categorical)
+regional.data <- regional.data %>% rename(year.x = year, regionid.ch = regionid)
+
+full.data <- full.data %>% merge(regional.data, by = c("regionid.ch", "year.x"))
+
+###Determining whether old mayor retained after cancelation
+data.container <- full.data %>% filter(regionid==99) %>%  mutate(mayor.cancel.year = NA)
+for (i in unique(full.data$city_id)){
+  city.sub <- subset(full.data, full.data$city_id == i)
+  cancel.year.row <- subset(city.sub, city.sub$cancel == 1)
+  mayor.cancel.year <- cancel.year.row$mayorid
+  if (length(mayor.cancel.year) == 0) {
+    city.sub <- city.sub %>% mutate(mayor.cancel.year = 0)
+    data.container <- rbind(data.container, city.sub)}
+  else {
+    city.sub <- city.sub %>% mutate(mayor.cancel.year = mayor.cancel.year)
+    data.container <- rbind(data.container, city.sub)
+  }
+}
+
+full.data <- data.container
+
+full.data <- full.data %>% mutate(elections.kept = ifelse(is.na(cancel.year) == TRUE, 1, 0))
+full.data <- full.data %>% mutate(elections.canceled = ifelse(is.na(cancel.year) == FALSE, 1, 0))
+
+full.data <- full.data %>% mutate(treat.appoint.newmayor = ifelse(is.na(cancel.year) == FALSE & 
+                                                                    year.x > cancel.year &
+                                                                    mayorid != mayor.cancel.year, 1, 0))
+full.data <- full.data %>% mutate(treat.appoint.oldmayor = ifelse(is.na(cancel.year) == FALSE & 
+                                                                    year.x > cancel.year &
+                                                                   mayorid == mayor.cancel.year, 1, 0))
+sum(full.data$treat.appoint.oldmayor, na.rm=TRUE)  #No old mayor is retained
+
+
+###Getting mayor tenure in years
+mayors.start <- full.data %>% group_by(mayorid) %>% summarise(min(year.x))
+mayors.start <- mayors.start %>% rename(mayor.start.year = `min(year.x)`)
+full.data <- merge(full.data, mayors.start, by="mayorid")
+
+full.data <- full.data %>% mutate(mayor.tenure = year.x - mayor.start.year)
+
+write.csv(full.data, "coefs with city covariates plus city_mayor.csv")
+
+```
+
+
+
+##CBPS
+
+```{r}
+full.data.0708 <- full.data %>% filter(year.x == 2007 | year.x == 2008)
+full.data.0708 <- full.data.0708 %>% mutate(nonstandardcoef.0708 = ifelse(year.x == 2007, nonstandard.coefs07, nonstandard.coefs08))
+#full.data.0708 <- full.data.0708 %>% mutate(treated.0708 = ifelse(is.na(cancel.year) == TRUE, 0, 1))
+
+myvars <- c("city_id", "city_mayor", "nonstandardcoef.0708",  "treated.0708",
+                "ethnic.categorical",  "urgov",  "mayor.tenure",
+                 "lnAvgSalary", "logsalary.timeaverage", "popprop.timeaverage",  "unemployrate",  "dem",  "education", "presidential")
+            #, "regmarginXmargin", "year.x", "margin", "regelect_margin", "regmargin.timeaverage", "regmarginXmargin.timeaverage")
+   
+dataset.matching <- full.data.0708[myvars]
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.0708 <- CBPS(treated.0708 ~ #margin + dem + regmargin.timeaverage +
+                        dem +
+                        popprop.timeaverage + mayor.tenure + logsalary.timeaverage, #+ regmarginXmargin.timeaverage,
+                      data=dataset.matching.complete)
+summary(cbps.out.0708)
+oversight.bal.firstround <- CBPS::balance(cbps.out.0708)
+oversight.bal.firstround
+
+pct.improvement.round1 <- abs((oversight.bal.firstround$balanced[,1] - oversight.bal.firstround$original[,1])/oversight.bal.firstround$original[,1])
+```
+
+```{r}
+cbpsmodel0708 <- lm(nonstandardcoef.0708 ~ treated.0708 + ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary +# regelect_margin +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708)
+
+
+
+coeftest.results.0708 <- coeftest(cbpsmodel0708, vcov = vcovCL(cbpsmodel0708, type="HC1", cluster = cbps.out.0708$data$city_id)) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results.0708
+```
+
+
+
+###2011-2012
+
+```{r}
+full.data.1112 <- full.data %>% filter(year.x == 2011 | year.x == 2012) 
+full.data.1112 <- full.data.1112 %>% mutate(nonstandardcoef.1112 = ifelse(year.x == 2011, nonstandard.coefs11, nonstandard.coefs12))
+
+
+myvars <- c("city_id", "city_mayor", "nonstandardcoef.1112",  "treated.1112",
+                "ethnic.categorical",  "urgov", "margin", "mayor.tenure",
+                 "lnAvgSalary", "logsalary.timeaverage", "popprop.timeaverage", "regmargin.timeaverage", "regmarginXmargin.timeaverage", "unemployrate",  "dem", "regelect_margin",  "education", "presidential", "regmarginXmargin", "year.x")
+   
+dataset.matching <- full.data.1112[myvars]
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.1112 <- CBPS(treated.1112 ~ margin + dem + regmargin.timeaverage +
+                        popprop.timeaverage + mayor.tenure + logsalary.timeaverage + regmarginXmargin.timeaverage, data=dataset.matching.complete)
+summary(cbps.out.1112)
+oversight.bal.firstround <- CBPS::balance(cbps.out.1112)
+oversight.bal.firstround
+
+pct.improvement.round1 <- abs((oversight.bal.firstround$balanced[,1] - oversight.bal.firstround$original[,1])/oversight.bal.firstround$original[,1])
+```
+
+
+```{r}
+cbpsmodel1112 <- lm(nonstandardcoef.1112 ~ treated.1112 + ethnic.categorical
+                   + urgov + #margin +
+                     mayor.tenure + lnAvgSalary + regelect_margin +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.1112$weights,
+                      data = cbps.out.1112$data)
+summary(cbpsmodel1112)
+
+
+
+coeftest.results.1112 <- coeftest(cbpsmodel1112, vcov = vcovCL(cbpsmodel1112, type="HC1", cluster = cbps.out.1112$data$city_id)) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results.1112
+```
+
+##Basic propensity score matching / weighting

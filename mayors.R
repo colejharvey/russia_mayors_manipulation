@@ -24,6 +24,13 @@ treatment.ids <- arrange(treatment.ids, regionid)
 
 data.container <- sub2004 %>% filter(regionid==99)  ##99 doesn't exit, so creates an empty tibble with correct columns
 
+n.precincts <- matrix(NA, nrow = nrow(match.set), ncol = 1)
+i <- 1
+for(i in 1:nrow(match.set)){
+  sub.iteration <- sub2004 %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
+  n.precincts[i,1] <- nrow(sub.iteration) 
+}
+
 i<-1
 
 for(i in 1:nrow(match.set)){
@@ -77,6 +84,14 @@ sub2012 <- read_excel("russia 2012 presidential election full.xlsx") %>% semi_jo
 treatment.ids <- arrange(treatment.ids, regionid)
 
 data.container <- sub2012 %>% filter(regionid==99)  ##99 doesn't exit, so creates an empty tibble with correct columns
+
+n.precincts <- matrix(NA, nrow = nrow(match.set), ncol = 1)
+i <- 1
+for(i in 1:nrow(match.set)){
+  sub.iteration <- sub2012 %>% filter(regionid == match.set$regionid[i]) %>% mutate(territory = stri_trans_general(kom1, 'latin'))
+  n.precincts[i,1] <- nrow(sub.iteration) 
+}
+
 
 i<-1
 

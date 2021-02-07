@@ -1,0 +1,242 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Apparently there is an issue with eventStudy overwriting some data, so it is wise to re-set the dataframe before each model.
+
+
+Note also, UR models are not helpful since they do not control for turnout.coef.
+
+Next step is to add residualize_coarviates to the ES step, adding necessary control variables.
+```{r setup}
+library(tidyverse)
+library(interactions)
+library(ggplot2)
+library(stargazer)
+library(eventStudy)
+library(fastDummies)
+
+full.data <- read.csv("coefs with city covariates cleaned.csv")
+```
+
+EventStudy package links here: https://github.com/setzler/eventStudy 
+
+##Data transformations
+
+
+```{r}
+full.data <- full.data %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+full.data <- full.data %>% rename(turnout.coef = turnout)
+
+##Year and country factors
+
+full.data <- full.data %>% mutate(city_id_factor = as.factor(city_id))
+full.data <- full.data %>% mutate(year_factor = as.factor(year.x))
+
+##Explanatory variables for OLS
+full.data <- full.data %>% mutate(appointed.exec = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x >= cancel.year, 1, 0)))
+full.data <- full.data %>% mutate(years.under.regime = ifelse(appointed.exec == 0, year.x - 2000, year.x - cancel.year))
+
+full.data <- full.data %>% mutate(years.with.elections = ifelse(is.na(cancel.year)==T, year.x-1996, ifelse(year.x - cancel.year < 0, year.x - 1996, cancel.year - 1996))) #This gives a measure of early vs late vs. control; 1996 bc this is when local elections first took place 
+
+
+##Adjusting treatment year to push treatments in 2008 and 2012 to the next year (so they do not affect elections in those years)
+
+full.data <- full.data %>% mutate(cancel.year.adj = ifelse(cancel.year == 2004, 2005,
+                                                    ifelse(cancel.year == 2008, 2009, 
+                                                    ifelse(cancel.year == 2012, NA, cancel.year))))
+full.data <- full.data %>% mutate(cancel.year.adj = as.integer(cancel.year.adj))
+
+##Dummies for ethnic categorical
+
+full.data <- dummy_cols(full.data, select_columns = "ethnic.categorical")
+full.data <- full.data %>% rename(majority.russian.republic = ethnic.categorical_Majority_Russian_republic)
+full.data <- full.data %>% rename(majority.minority.republic = `ethnic.categorical_Majority-minority_republic`)
+
+##Known opp mayor
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+
+```
+
+Separate into pres and parl
+
+```{r}
+pres.data <- full.data %>% filter(presidential == 1)
+parl.data <- full.data %>% filter(presidential == 0)
+```
+
+
+##Estimation: all data
+
+Overall
+
+```{r}
+##Convert to data.table
+full.data2 <- full.data %>% filter(is.na(urgov)==F) %>% data.table::data.table()
+results <- ES(long_data=full.data2, outcomevar="turnout.coef", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2,
+              residualize_covariates = T,
+              #anticipation = 1,
+              discrete_covars = c("urgov", "known.opp.mayor", "majority.russian.republic", "majority.minority.republic"),
+              cont_covars = c("margin.most.recent", "lnAvgSalary", "poppopprop", "civsoc91", "mayor.tenure", "education", "unemployrate"))
+p.tc.means <- ES_plot_levels(results, lower_event = -7, upper_event = 9) + ylab("Mean of the Outcome") + facet_wrap(vars(ref_onset_time))
+p.tc.means
+p.tc.hetero <- ES_plot_ATTs(results, lower_event = -7, upper_event = 9) + ylab("ATT Estimate (95% CI)")
+p.tc.hetero
+p.tc.homo <- ES_plot_ATTs(results, lower_event = -7, upper_event = 9, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+p.tc.homo
+
+png(filename = "turnout coefficient cohort means.png", width = 7, height = 5, units = "in",
+    res = 500)
+p.tc.means
+dev.off()
+
+png(filename = "turnout coefficient heterogenous att.png", width = 7, height = 5, units = "in",
+    res = 500)
+p.tc.hetero
+dev.off()
+```
+
+
+Nonstandard
+
+
+```{r}
+full.data2 <- full.data %>% filter(is.na(urgov)==F) %>% data.table::data.table()
+results <- ES(long_data=full.data2, outcomevar="nonstandard.coef", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2,
+              residualize_covariates = T,
+              discrete_covars = c("presidential", "urgov"),
+              cont_covars = c("margin.most.recent", "lnAvgSalary", "poppopprop", "civsoc91", "mayor.tenure", "education", "unemployrate", "majority.russian.republic", "majority.minority.republic"))
+ES_plot_levels(results, lower_event = -7, upper_event = 7) + ylab("Mean of the Outcome") + facet_wrap(vars(ref_onset_time))
+ES_plot_ATTs(results, lower_event = -7, upper_event = 7) + ylab("ATT Estimate (95% CI)")
+ES_plot_ATTs(results, lower_event = -7, upper_event = 7, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+```
+
+
+UR voteshare
+
+
+```{r}
+##Convert to data.table
+full.data2 <- full.data %>% filter(is.na(urgov)==F) %>% data.table::data.table()
+results <- ES(long_data=full.data2, outcomevar="ur.voteshare", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2,
+              residualize_covariates = T,
+              #anticipation = 1,
+              discrete_covars = c("urgov", "known.opp.mayor", "majority.russian.republic", "majority.minority.republic"),
+              cont_covars = c("margin.most.recent", "lnAvgSalary", "poppopprop", "civsoc91", "mayor.tenure", "education", "unemployrate", "turnout.coef"))
+p.ur.means <- ES_plot_levels(results, lower_event = -7, upper_event = 9) + ylab("Mean of the Outcome") + facet_wrap(vars(ref_onset_time))
+p.ur.means
+p.ur.hetero <- ES_plot_ATTs(results, lower_event = -7, upper_event = 9) + ylab("ATT Estimate (95% CI)")
+p.ur.hetero
+p.ur.homo <- ES_plot_ATTs(results, lower_event = -7, upper_event = 9, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+p.ur.homo
+
+png(filename = "voteshare cohort means.png", width = 7, height = 5, units = "in",
+    res = 500)
+p.ur.means
+dev.off()
+
+png(filename = "voteshare heterogenous att.png", width = 7, height = 5, units = "in",
+    res = 500)
+p.ur.hetero
+dev.off()
+```
+
+
+##Estimation: pres data
+
+```{r}
+pres2 <- data.table::data.table(pres.data)
+results <- ES(long_data=pres2, outcomevar="turnout.coef", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2)
+ES_plot_levels(results, lower_event = -8, upper_event = 8) + ylab("Mean of the Outcome")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8) + ylab("ATT Estimate (95% CI)")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+
+```
+
+
+```{r}
+pres2 <- data.table::data.table(pres.data)
+results <- ES(long_data=pres2, outcomevar="nonstandard.coef", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2)
+ES_plot_levels(results, lower_event = -8, upper_event = 8) + ylab("Mean of the Outcome")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8) + ylab("ATT Estimate (95% CI)")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+
+```
+
+```{r}
+pres2 <- data.table::data.table(pres.data)
+results <- ES(long_data=pres2, outcomevar="ur.voteshare", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2)
+ES_plot_levels(results, lower_event = -8, upper_event = 8) + ylab("Mean of the Outcome")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8) + ylab("ATT Estimate (95% CI)")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+
+```
+
+
+###Parl
+
+```{r}
+parl2 <- data.table::data.table(parl.data)
+results <- ES(long_data=parl2, outcomevar="turnout.coef", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2)
+ES_plot_levels(results, lower_event = -8, upper_event = 8) + ylab("Mean of the Outcome")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8) + ylab("ATT Estimate (95% CI)")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+
+```
+
+
+```{r}
+parl2 <- data.table::data.table(parl.data)
+results <- ES(long_data=parl2, outcomevar="nonstandard.coef", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2)
+ES_plot_levels(results, lower_event = -8, upper_event = 8) + ylab("Mean of the Outcome")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8) + ylab("ATT Estimate (95% CI)")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+
+```
+
+```{r}
+parl2 <- data.table::data.table(parl.data)
+results <- ES(long_data=parl2, outcomevar="ur.voteshare", 
+              unit_var="city_id", cal_time_var="year.x", 
+              onset_time_var="cancel.year.adj", cluster_vars="city_id",
+              never_treat_action = "only",  #uses never-treated as controls; set to "keep" to use never-treated and not-yet treated as controls
+              omitted_event_time = -2)
+ES_plot_levels(results, lower_event = -8, upper_event = 8) + ylab("Mean of the Outcome")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8) + ylab("ATT Estimate (95% CI)")
+ES_plot_ATTs(results, lower_event = -8, upper_event = 8, homogeneous_ATT = T) + ylab("ATT Estimate (95% CI)")
+
+```

@@ -1,0 +1,338 @@
+---
+title: "Appendix models"
+output: html_notebook
+---
+
+```{r setup}
+library(tidyverse)
+library(interactions)
+library(stargazer)
+library(fastDummies)
+library(geepack)
+library(survey)
+library(ipw)
+library(reshape)
+#full.data <- read.csv("cleaned data full all years_v2.csv")
+
+full.data <- read.csv("coefs with city covariates cleaned.csv")
+#absentee <- read.csv("absentee coefficients.csv")
+#absentee <- absentee %>% dplyr::select(pct.absentee, city_id_year)
+#full.data <- merge(full.data, absentee, by = "city_id_year")
+
+#Note: Missing cities are manually added to full.data file
+
+full.data <- full.data %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+full.data <- full.data %>% mutate(appointed.exec = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x >= cancel.year, 1, 0)))
+full.data <- full.data %>% dplyr::rename(turnout.coef = turnout)
+
+full.data <- full.data %>% mutate(years.with.elections = ifelse(is.na(cancel.year)==T, year.x-1996, ifelse(year.x - cancel.year < 0, year.x - 1996, cancel.year - 1996))) #This gives a measure of early vs late vs. control; 1996 bc this is when local elections first took place 
+
+full.data <- full.data %>% mutate(years.post.treatment = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x - cancel.year < 0, 0, year.x - cancel.year)))
+full.data <- full.data %>% mutate(years.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2007 & year.x ==2007, 1, years.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+full.data <- full.data %>% mutate(years.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2011 & year.x ==2011, 1, years.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+
+full.data <- full.data %>% mutate(treated.post.treatment = ifelse(is.na(cancel.year)==T, 0, ifelse(year.x - cancel.year < 0, 0, 1)))
+full.data <- full.data %>% mutate(treated.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2007 & year.x ==2007, 1, treated.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+full.data <- full.data %>% mutate(treated.post.treatment = ifelse(is.na(cancel.year)==F & cancel.year == 2011 & year.x ==2011, 1, treated.post.treatment)) #This codes cancelations in 2007 and 2011 as 1 for those years, since elections take place at year-end.
+
+
+full.data <- full.data %>% mutate(years.under.appt = ifelse(is.na(cancel.year) == T, 0, ifelse(year.x - cancel.year < 0, 0, ifelse(year.x == 2007 | year.x == 2011 & year.x == cancel.year, 1, year.x - cancel.year))))
+
+full.data <- full.data %>% mutate(city_id_factor = as.factor(city_id))
+
+
+full.data <- full.data %>% mutate(treatment.group = ifelse(is.na(cancel.year)==F, 1, 0))
+
+full.data <- full.data %>% mutate(control = ifelse(is.na(cancel.year)==T, 1, 0))
+full.data <- full.data %>% mutate(early.treated = ifelse(is.na(cancel.year)==F & cancel.year <= 2007, 1, 0))
+full.data <- full.data %>% mutate(late.treated = ifelse(is.na(cancel.year)==F & cancel.year > 2007, 1, 0))
+
+
+full.data <- full.data %>% mutate(years.under.regime = ifelse(appointed.exec == 0, year.x - 2000, year.x - cancel.year))
+
+##Dummies for ethnic categorical
+
+full.data <- dummy_cols(full.data, select_columns = "ethnic.categorical")
+full.data <- full.data %>% dplyr::rename(majority.russian.republic = ethnic.categorical_Majority_Russian_republic)
+full.data <- full.data %>% dplyr::rename(majority.minority.republic = `ethnic.categorical_Majority-minority_republic`)
+
+##Lagged treatments
+###Note: go into earlier data frame and lag by year, not by period
+
+full.data <- full.data %>% mutate(cancel.year.mod = ifelse(is.na(cancel.year)==T, NA, ifelse(is.na(cancel.year)==F & cancel.year != 2008 & cancel.year != 2012, cancel.year, cancel.year + 1)))
+
+full.data <- full.data %>% mutate(treated.mod = ifelse(is.na(cancel.year.mod)==T, 0, ifelse(year.x >= cancel.year.mod, 1, 0)))
+
+full.data <- full.data %>% mutate(treated.mod.1lag = ifelse(is.na(cancel.year.mod)==T, 0, ifelse(year.x >= cancel.year.mod + 1, 1, 0)))
+
+full.data <- full.data %>% mutate(treated.mod.2lag = ifelse(is.na(cancel.year.mod)==T, 0, ifelse(year.x >= cancel.year.mod + 2, 1, 0)))
+
+full.data <- full.data %>% mutate(treated.mod.3lag = ifelse(is.na(cancel.year.mod)==T, 0, ifelse(year.x >= cancel.year.mod + 3, 1, 0)))
+
+full.data <- full.data %>% mutate(treated.mod.4lag = ifelse(is.na(cancel.year.mod)==T, 0, ifelse(year.x >= cancel.year.mod + 4, 1, 0)))
+
+
+##Lagged DVs
+
+full.data <- full.data %>% group_by(city_id) %>% mutate(turncoef.1lag = lag(turnout.coef))
+full.data <- full.data %>% group_by(city_id) %>% mutate(turncoef.2lag = lag(turnout.coef, 2))
+
+full.data <- full.data %>% group_by(city_id) %>% mutate(urvoteshare.1lag = lag(ur.voteshare))
+full.data <- full.data %>% group_by(city_id) %>% mutate(urvoteshare.2lag = lag(ur.voteshare, 2))
+
+##Elections since treatment
+
+full.data <- full.data %>% mutate(elex.since.treatment = ifelse(is.na(cancel.year.mod)==T, 0, ifelse(cancel.year.mod <= 2007 & year.x == 2008, 1, ifelse(cancel.year.mod <= 2007 & year.x == 2011, 2, ifelse(cancel.year.mod <= 2007 & year.x == 2012, 3, NA)))))
+
+full.data <- full.data %>% mutate(elex.since.treatment = ifelse(is.na(elex.since.treatment) == F, elex.since.treatment, 
+                                  ifelse(cancel.year.mod == 2008 & year.x < 2011, 0, 
+                                  ifelse(cancel.year.mod == 2008 & year.x == 2011, 1,
+                                  ifelse(cancel.year.mod == 2008 & year.x == 2012, 2, elex.since.treatment)))))
+
+
+full.data <- full.data %>% mutate(elex.since.treatment = ifelse(is.na(elex.since.treatment) == F, elex.since.treatment, 
+                                  ifelse(cancel.year.mod > 2008 & cancel.year.mod <= 2011 & year.x <= 2011, 0, 
+                                  ifelse(cancel.year.mod > 2008 & cancel.year.mod <= 2011 & year.x == 2012, 1,  elex.since.treatment))))
+
+
+full.data <- full.data %>% mutate(elex.since.treatment = ifelse(is.na(elex.since.treatment) == F, elex.since.treatment, 0))
+
+##Region id as factor
+
+full.data <- full.data %>% mutate(regionid.ch = as.factor(regionid.ch))
+```
+
+
+##IPW with prior treated cities in region
+
+```{r}
+##Note: including urvoteshare and/or turnoutcoef worsens balance on those variables, so they are excluded
+
+covariates <- full.data %>% select(city_id, presidential, xconst.lag, putin.app.3mo, urgov, mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, year.x, treated.mod, turnout.coef, years.under.regime, ur.voteshare , treated.mod.1lag, treated.mod.2lag, treated.mod.3lag, years.with.elections, urvoteshare.1lag, turncoef.1lag, prior.treat.cities.region)
+                                   
+complete.tf <- complete.cases(covariates)
+covariates <- bind_cols(covariates, complete.tf)
+covariates <- covariates %>% dplyr::rename(complete.tf = ...24)
+
+covariates <- covariates %>% filter(complete.tf == T)
+
+data_long_sort <- covariates %>% dplyr::arrange(city_id, year.x)
+data_long_sort <- data_long_sort %>% dplyr::select(-complete.tf)
+data_long_sort <- data.frame(data_long_sort)
+
+w <- ipwtm(
+  exposure = treated.mod,
+  family = "binomial",
+  link = "logit",
+  numerator = ~ treated.mod.1lag + treated.mod.2lag,
+  denominator = ~ treated.mod.1lag + treated.mod.2lag + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent +  dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+  id = city_id,
+  timevar=year.x,
+  type="first",
+  data = data_long_sort)
+summary(w$ipw.weights)
+```
+
+
+
+```{r}
+iptw = w$ipw.weights
+
+
+# Add the iptw variable onto a new dataframe = data2.
+data2 <- cbind(data_long_sort, iptw)
+
+##Truncated weights .95
+
+data2 <- data2 %>% mutate(tsw = ifelse(iptw < quantile(iptw, probs=.05), quantile(iptw, probs=.05), iptw))
+
+data2 <- data2 %>% mutate(tsw = ifelse(iptw > quantile(iptw, probs=.95), quantile(iptw, probs=.95), tsw))
+
+summary(data2$tsw)
+```
+
+```{r}
+###########################################################################################
+# GEE model #2 - IPTW fitted to MSM with clustered robust SE
+###########################################################################################
+########################################################################
+gee.iptw <- geeglm(turnout.coef~ treated.mod*prior.treat.cities.region + treated.mod.1lag + treated.mod.2lag + presidential + xconst.lag +
+                     putin.app.3mo + mayor.tenure + cluster(city_id) + prior.treat.cities.region,
+                    id=city_id,
+                    data=data2, 
+                    family=gaussian("identity"), 
+                    corstr="ar1", 
+                   weights=tsw)
+summary(gee.iptw)
+#m1 <- broom::tidy(gee.iptw)
+#pixiedust::dust(m1) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+
+gee.iptw2 <- geeglm(ur.voteshare~ treated.mod*prior.treat.cities.region + treated.mod.1lag + treated.mod.2lag +  presidential + xconst.lag +
+                     putin.app.3mo + mayor.tenure + turnout.coef + cluster(city_id) + prior.treat.cities.region,
+                    id=city_id,
+                    data=data2, 
+                    family=gaussian("identity"), 
+                    corstr="ar1", 
+                   weights=tsw)
+summary(gee.iptw2)
+
+#m2 <- broom::tidy(gee.iptw2)
+#pixiedust::dust(m2) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T)
+
+```
+
+##IPW excluding 2003 and 2004 (treatment not possible)
+
+```{r}
+##Note: including urvoteshare and/or turnoutcoef worsens balance on those variables, so they are excluded
+
+covariates <- full.data %>% select(city_id, presidential, xconst.lag, putin.app.3mo, urgov, mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, year.x, treated.mod, turnout.coef, years.under.regime, ur.voteshare , treated.mod.1lag, treated.mod.2lag, treated.mod.3lag, years.with.elections, urvoteshare.1lag, turncoef.1lag, prior.treat.cities.region)
+covariates <- covariates %>% filter(year.x > 2004)
+                                   
+complete.tf <- complete.cases(covariates)
+covariates <- bind_cols(covariates, complete.tf)
+covariates <- covariates %>% dplyr::rename(complete.tf = ...24)
+
+covariates <- covariates %>% filter(complete.tf == T)
+
+data_long_sort <- covariates %>% dplyr::arrange(city_id, year.x)
+data_long_sort <- data_long_sort %>% dplyr::select(-complete.tf)
+data_long_sort <- data.frame(data_long_sort)
+
+w <- ipwtm(
+  exposure = treated.mod,
+  family = "binomial",
+  link = "logit",
+  numerator = ~ treated.mod.1lag + treated.mod.2lag,
+  denominator = ~ treated.mod.1lag + treated.mod.2lag + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent +  dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+  id = city_id,
+  timevar=year.x,
+  type="first",
+  data = data_long_sort)
+summary(w$ipw.weights)
+```
+
+
+
+```{r}
+iptw = w$ipw.weights
+
+
+# Add the iptw variable onto a new dataframe = data2.
+data2 <- cbind(data_long_sort, iptw)
+
+##Truncated weights .95
+
+data2 <- data2 %>% mutate(tsw = ifelse(iptw < quantile(iptw, probs=.05), quantile(iptw, probs=.05), iptw))
+
+data2 <- data2 %>% mutate(tsw = ifelse(iptw > quantile(iptw, probs=.95), quantile(iptw, probs=.95), tsw))
+
+summary(data2$tsw)
+```
+
+```{r}
+###########################################################################################
+# GEE model #2 - IPTW fitted to MSM with clustered robust SE
+###########################################################################################
+########################################################################
+gee.iptw <- geeglm(turnout.coef~ treated.mod + treated.mod.1lag + treated.mod.2lag + presidential + 
+                     putin.app.3mo + mayor.tenure + cluster(city_id),
+                    id=city_id,
+                    data=data2, 
+                    family=gaussian("identity"), 
+                    corstr="ar1", 
+                   weights=tsw)
+summary(gee.iptw)
+#m1 <- broom::tidy(gee.iptw)
+#pixiedust::dust(m1) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+
+gee.iptw2 <- geeglm(ur.voteshare~ treated.mod + treated.mod.1lag + treated.mod.2lag +  presidential + 
+                     putin.app.3mo + mayor.tenure + turnout.coef + cluster(city_id),
+                    id=city_id,
+                    data=data2, 
+                    family=gaussian("identity"), 
+                    corstr="ar1", 
+                   weights=tsw)
+summary(gee.iptw2)
+
+#m2 <- broom::tidy(gee.iptw2)
+#pixiedust::dust(m2) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T)
+
+```
+
+CBPS weights using WeightIt
+
+To do this, need to capture the full treatment history. I.e. tx1 = 1 if treated in 2003, tx2 = 1 if treated in 2004
+
+geeglm doesn't work for the CBPS weights, but a basic lm does. Need to make sure that is acceptable.
+
+```{r}
+#full.data <- full.data %>% mutate(tx1 = 0)
+full.data <- full.data %>% mutate(tx2 = 0)
+full.data <- full.data %>% mutate(tx3 = ifelse(is.na(cancel.year) == T, 0, ifelse(cancel.year <= 2007, 1, 0)))
+full.data <- full.data %>% mutate(tx4 = ifelse(is.na(cancel.year) == T, 0, ifelse(cancel.year <= 2007, 1, 0)))
+full.data <- full.data %>% mutate(tx5 = ifelse(is.na(cancel.year) == T, 0, ifelse(cancel.year <= 2011, 1, 0)))
+full.data <- full.data %>% mutate(tx6 = ifelse(is.na(cancel.year) == T, 0, ifelse(cancel.year <= 2011, 1, 0)))
+
+
+
+```
+
+
+```{r}
+W <- weightitMSM(list(tx3 ~ tx2 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
+                      #tx2 ~ tx1 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
+                    
+                      tx4 ~ tx3 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
+                      tx5 ~  +  tx3  + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
+                      tx6 ~ tx3 + tx4 + tx5 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections),
+                 method = "cbps",
+                      data = full.data)
+weights <- W$weights
+full.data <- bind_cols(full.data, weights)
+full.data <- full.data %>% dplyr::rename(cbps.weights = ...119)
+
+```
+
+
+```{r}
+
+########################################################################
+cbps.lm1 <- lm(turnout.coef~ tx3 + tx5 + presidential + xconst.lag +
+                     putin.app.3mo + mayor.tenure,
+                    data=full.data, 
+                     weights=cbps.weights)
+summary(cbps.lm1)
+#m1 <- broom::tidy(gee.iptw)
+#pixiedust::dust(m1) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+
+cbps.lm2 <- geeglm(ur.voteshare~ tx3 + tx5 +  presidential + xconst.lag + 
+                     putin.app.3mo + mayor.tenure + turnout.coef + cluster(city_id),
+                    id=city_id,
+                    data=full.data, 
+                    family=gaussian("identity"), 
+                    corstr="ar1",
+                    weights=cbps.weights)
+summary(cbps.lm2)
+
+#m2 <- broom::tidy(gee.iptw2)
+#pixiedust::dust(m2) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T)
+
+```
+

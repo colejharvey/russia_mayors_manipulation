@@ -1,0 +1,188 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(CBPS)
+library(lmtest)  #Getting clustered sEs 
+library(sandwich)
+library(ggplot2)
+library(stargazer)
+reuter.data <- read.csv("reuter_et_al_data_v2.csv")
+reuter.data <- reuter.data %>% mutate(city_mayor = paste(city_id, mayorid, sep="_"))
+```
+
+
+Data cleaning ultimately requires one observation for each city in 2007, 2008, 2011, and 2012
+
+1) Each observation should have the following index variables:
+
+'city_id', 'mayorid', 'city_mayor', 'year' 'regionid_ch', 'cancel.year'
+
+2) The treatment variables 'treated.0708' and 'treated.1112', which are determined by 'cancel.year' and 'year'
+
+3) The dependent variable 'nonstandard.coef.0708' and 'nonstandard.coef.1112'
+
+4) The pre-treatment variables 'margin_pretreat', 'dem', 'regelect_margin_pretreat', 'popprop.avg.pretreat', 'tenure_pretreat', 'salaryavg_pretreat', 'regmarginXmargin_pretreat'
+
+5) The election-year variables 'ethnic.categorical', 'urgov' 'margin', 'mayor.tenure', 'lnAvgSalary', 'regelect_margin', 'unemployrate', 'education' and 'presidential'
+
+```{r}
+reuter.base <- reuter.data %>% filter(year == 2007 | year == 2008 | year == 2011 | year == 2012) #Sets up the base dataframe, includes all step 1 variables except regionid_ch
+```
+
+Creating step 2) treatment variables
+
+```{r}
+reuter.base <- reuter.base %>% mutate(treated.0708 = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year <= 2007, 1, 0)))
+reuter.base <- reuter.base %>% mutate(treated.1112 = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year > 2007 & cancel.year <= 2011, 1, 0)))
+```
+
+Creating step 3) dependent variables
+
+```{r}
+coefs.all <- read.csv("all nonstandard coefs with cityid.csv") 
+coefs.all <- coefs.all %>% rename(city_id_year = "ï..city_id_year")
+
+coefs.only <- coefs.all %>% dplyr::select(city_id_year, city_id, pct.nonstandard, year)
+coefs.2007 <- coefs.only %>% filter(year == 2007)
+coefs.2008 <- coefs.only %>% filter(year == 2008)
+coefs.2011 <- coefs.only %>% filter(year == 2011)
+coefs.2012 <- coefs.only %>% filter(year == 2012)
+
+coefs.2007 <- coefs.2007 %>% rename(nonstandard.coefs07 = pct.nonstandard)
+coefs.2008 <- coefs.2008 %>% rename(nonstandard.coefs08 = pct.nonstandard)
+coefs.2011 <- coefs.2011 %>% rename(nonstandard.coefs11 = pct.nonstandard)
+coefs.2012 <- coefs.2012 %>% rename(nonstandard.coefs12 = pct.nonstandard)
+
+coefs.2007 <- coefs.2007 %>% dplyr::select(nonstandard.coefs07, city_id)
+coefs.2008 <- coefs.2008 %>% dplyr::select(nonstandard.coefs08, city_id)
+coefs.2011 <- coefs.2011 %>% dplyr::select(nonstandard.coefs11, city_id)
+coefs.2012 <- coefs.2012 %>% dplyr::select(nonstandard.coefs12, city_id)
+
+
+
+reuter.base <- merge(reuter.base, coefs.2007, by = "city_id")
+reuter.base <- merge(reuter.base, coefs.2008, by = "city_id")
+reuter.base <- merge(reuter.base, coefs.2011, by = "city_id")
+reuter.base <- merge(reuter.base, coefs.2012, by = "city_id")
+
+reuter.base <- reuter.base %>% mutate(nonstandardcoef.0708 = ifelse(year == 2007, nonstandard.coefs07, ifelse(year == 2008, nonstandard.coefs08, NA)))
+
+reuter.base <- reuter.base %>% mutate(nonstandardcoef.1112 = ifelse(year == 2011, nonstandard.coefs11, ifelse(year == 2012, nonstandard.coefs12, NA)))
+
+```
+
+Creating the step 4) pre-treatment variables: 'margin_pretreat', 'dem', 'regelect_margin_pretreat', 'popprop.avg.pretreat', 'tenure_pretreat', 'salaryavg_pretreat', 'regmarginXmargin_pretreat'
+
+```{r}
+city.ids <- unique(reuter.data$city_id)
+data.container <- matrix(NA, nrow = length(city.ids), ncol = 2)
+
+i<-1
+
+for(i in 1:length(city.ids)){
+subgroup <- subset(reuter.data, reuter.data$city_id == city.ids[i])
+data.container[i,1] <- city.ids[i]
+data.container[i, 2] <- ifelse(sum(subgroup$cancel, na.rm=TRUE) == 0, 0, 1)
+}
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_id = V1)
+data.container <- data.container %>% rename(treatment_group = V2)
+
+reuter.data <- merge(reuter.data, data.container, by = "city_id")
+
+```
+
+Getting margin_pretreat
+
+```{r}
+city.mayors <- unique(reuter.data$city_mayor)
+data.container <- matrix(NA, nrow = length(city.mayors), ncol = 2)
+
+
+i<-1
+
+for(i in 1:length(city.mayors)){
+subgroup <- subset(reuter.data, reuter.data$city_mayor == city.mayors[i])
+subgroup.treatyear <- subset(subgroup, subgroup$cancel == 1)
+data.container[i,1] <- city.mayors[i]
+data.container[i, 2] <- ifelse(sum(subgroup$cancel, na.rm=TRUE) == 0, round(mean(subgroup$margin, na.rm=TRUE), 4),
+                                                 round(subgroup.treatyear$margin, 4))
+}
+
+
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_mayor = V1)
+data.container <- data.container %>% rename(margin_pretreat = V2)
+data.container <- data.container %>% mutate(margin_pretreat = as.numeric(margin_pretreat))
+
+reuter.data <- merge(reuter.data, data.container, by = "city_mayor")
+
+
+data.container <- matrix(NA, nrow = nrow(reuter.data), ncol = 2)
+i <- 1
+
+for(i in 1:nrow(reuter.data)){
+subgroup <- subset(reuter.data, reuter.data$city_id == reuter.data$city_id[i])
+subgroup.treatyear <- subset(subgroup, subgroup$cancel == 1)
+data.container[i,1] <- reuter.data$city_id[i]
+data.container[i, 2] <- ifelse(is.na(reuter.data$margin_pretreat[i]) == TRUE & is.na(reuter.data$cancel.year[i]) == FALSE & reuter.data$year[i] > reuter.data$cancel.year[i], subgroup.treatyear$margin, reuter.data$margin[i])
+}
+
+
+temp <- reuter.data %>% dplyr::select(city_mayor, year, cancel, margin, margin_pretreat)
+
+###This version seems to have worked
+```
+
+Getting regelect_margin_pretreat
+
+```{r}
+city.mayors <- unique(reuter.data$city_mayor)
+data.container <- matrix(NA, nrow = length(city.mayors), ncol = 2)
+
+
+i<-1
+
+for(i in 1:length(city.mayors)){
+subgroup <- subset(reuter.data, reuter.data$city_mayor == city.mayors[i])
+subgroup.treatyear <- subset(subgroup, subgroup$cancel == 1)
+data.container[i,1] <- city.mayors[i]
+data.container[i, 2] <- ifelse(sum(subgroup$cancel, na.rm=TRUE) == 0, round(mean(subgroup$regelect_margin, na.rm=TRUE), 4),
+                                                 round(subgroup.treatyear$regelect_margin, 4))
+}
+
+
+
+data.container <- as_tibble(data.container) 
+data.container <- data.container %>% rename(city_mayor = V1)
+data.container <- data.container %>% rename(regelect_margin_pretreat = V2)
+data.container <- data.container %>% mutate(regelect_margin_pretreat = as.numeric(regelect_margin_pretreat))
+
+reuter.data <- merge(reuter.data, data.container, by = "city_mayor")
+
+
+data.container <- matrix(NA, nrow = nrow(reuter.data), ncol = 2)
+i <- 1
+
+for(i in 1:nrow(reuter.data)){
+subgroup <- subset(reuter.data, reuter.data$city_id == reuter.data$city_id[i])
+subgroup.treatyear <- subset(subgroup, subgroup$cancel == 1)
+data.container[i,1] <- reuter.data$city_id[i]
+data.container[i, 2] <- ifelse(is.na(reuter.data$regelect_margin_pretreat[i]) == TRUE & is.na(reuter.data$cancel.year[i]) == FALSE & reuter.data$year[i] > reuter.data$cancel.year[i], subgroup.treatyear$regelect_margin, reuter.data$regelect_margin[i])
+}
+
+temp <- reuter.data %>% dplyr::select(city_mayor, year, cancel, regelect_margin, regelect_margin_pretreat)
+
+```
+
+
+
+
+Once the general principle is set up here, it might be wise to split the process up into two datasets, before and after 2008

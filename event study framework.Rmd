@@ -1,0 +1,972 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(CBPS)
+library(lmtest)  #Getting clustered sEs 
+library(sandwich)
+library(ggplot2)
+library(stargazer)
+library(interplot)
+library(eventStudy)
+library(data.table)
+library(cobalt) #Balance; very useful package
+library(broom)
+library(fastDummies)
+library(did) #Callaway and Sant'Anna
+```
+
+
+
+
+```{r}
+full.data <- read.csv("cleaned data full all years_v2.csv")
+
+
+full.data <- full.data %>% mutate(years.since.treat = ifelse(is.na(cancel.year) == TRUE | cancel.year > year.x, 0, (year.x - cancel.year) + 1))
+
+#full.data <- full.data %>% mutate(treat.weight.year = ifelse(treated.0708 == 1, treated.0708 / years.since.treat, 0))
+
+full.data <- full.data %>% mutate(years_with_elections = ifelse(is.na(cancel.year) == TRUE, year.x - 2003, year.x - cancel.year))
+
+full.data <- full.data %>% mutate(turnout.coef.susp = ifelse(turnout.coef >= 1, 1, 0))
+
+
+full.data <- full.data %>% mutate(election.period = ifelse(year.x == 2003, 1, ifelse(year.x == 2004, 2, ifelse(year.x
+                                  == 2007, 3, ifelse(year.x == 2008, 4,
+                                  ifelse(year.x == 2011, 5, 6))))))
+
+full.data <- full.data %>% mutate(calendar.period.small = ifelse(year.x ==2003 | year.x == 2004, 1, ifelse(year.x == 2007 | year.x == 2008, 2, 3)))
+
+full.data <- full.data %>% mutate(treat.cohort = ifelse(is.na(cancel.year) == TRUE, "Inf", ifelse(cancel.year >= 2004 &                                                  cancel.year < 2007, 2, ifelse(
+                                                 cancel.year == 2007, 3, ifelse(
+                                                   cancel.year >= 2008 & cancel.year < 2011, 4, ifelse(
+                                                     cancel.year == 2011, 5, "Inf"
+                                                   )
+                                                 )
+))))
+
+
+
+#full.data <- full.data %>% mutate(rel.treat.time = ifelse(treat.cohort == "Inf", 0, time.period - as.numeric(treat.cohort)))
+
+full.data <- full.data %>% mutate(treat.cohort = factor(treat.cohort))
+
+#Next make individual variables for each level of the factor; also try the same approach with only three periods (year <= 2004 = 0, year <=2008 = 1, year <= 2012 = 2)
+
+
+
+
+full.data <- full.data %>% mutate(cohort2 = ifelse(as.numeric(treat.cohort) == 2, 1, 0))
+full.data <- full.data %>% mutate(cohort3 = ifelse(as.numeric(treat.cohort) == 3, 1, 0))
+full.data <- full.data %>% mutate(cohort4 = ifelse(as.numeric(treat.cohort) == 4, 1, 0))
+full.data <- full.data %>% mutate(cohort5 = ifelse(as.numeric(treat.cohort) == 5, 1, 0))
+full.data <- full.data %>% mutate(cohort_inf = ifelse(treat.cohort == "Inf", 1, 0))
+
+full.data <- full.data %>% mutate(appointed.exec = ifelse(treated.0708 == 1 | treated.1112, 1, 0))
+#full.data <- full.data %>% mutate(appointed.exec = ifelse(year.x == 2003, NA, appointed.exec))
+
+full.data <- full.data %>% mutate(elected.transition = ifelse(year.x < cancel.year & exec.first.election == 1, 1, 0))
+full.data <- full.data %>% mutate(appointed.transition = ifelse(year.x >= cancel.year & cross.regime.transition == 0 & exec.first.election == 1, 1, 0))
+
+
+full.data <- 
+    full.data %>%
+    group_by(city_id) %>%
+    mutate(lag.manipulation = dplyr::lag(turnout.coef, n = 1, default = NA)) #Lagging manipulation
+
+full.data <- full.data %>% mutate(treated = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year <= year.x, 1, 0)))
+
+full.data <- full.data %>% mutate(treated = ifelse(is.na(cancel.year) == FALSE & cancel.year == 2008 & year.x == 2008, 0, treated))
+
+
+```
+
+Creating relative treatment counter using time.period instead of calendar time
+Time periods are:
+2003 == 1 or 0 (AS)
+2004 == 2 or 1
+2007 == 3 or 2
+2008 == 4 or 3
+2011 == 5 or 4
+2012 == 6 or 5
+
+Treatment period should collapse to the previous election time. I.e. elections canceled between 2004 and 2007 should score as 2, so that they are 1 period post treatment by 2007 election
+
+```{r}
+#Currently set up for Callaway and Santanna framework
+#full.data <- full.data %>% mutate(cancel.period = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(
+#  cancel.year < 2003, 1, ifelse(
+#    cancel.year == 2003, 2, ifelse(
+#      cancel.year >= 2004 & cancel.year <= 2006, 3, ifelse(
+#        cancel.year == 2007, 4, ifelse(
+#        cancel.year >= 2008 & cancel.year <= 2010, 5, ifelse(
+#          cancel.year == 2011, 6, 0
+#        ))
+#        )
+#      )
+#    ) 
+#  )
+#))
+
+full.data <- full.data %>% mutate(relative.treatment = ifelse(is.na(cancel.year)==TRUE, 0, year.x - cancel.year))
+full.data <- dummy_cols(full.data, select_columns = "relative.treatment")
+
+full.data <- full.data %>% mutate(cancel.period.small = ifelse(is.na(cancel.year) == T, 0, ifelse(cancel.year < 2004, 1, ifelse(cancel.year >= 2004 & cancel.year <= 2007, 2, 3))))
+
+#full.data <- dummy_cols(full.data, select_columns = "cancel.period")
+
+      
+#full.data <- full.data %>% mutate(rel.treat.period = ifelse())
+
+###For Abraham and Sun specification
+
+###Make calendar periods 0:5
+
+#full.data <- full.data %>% mutate(calendar.period = ifelse(year.x < 2003, 0, 
+#                                                      ifelse(year.x == 2003, 1, 
+#                                                      ifelse(year.x >= 2004 & year.x < 2007, 2,
+#                                                      ifelse(year.x == 2007, 3,
+#                                                             ifelse(year.x >= 2008 & year.x <= 2010, 4,
+#                                                      ifelse(year.x == 2011, 5, 6)))))))
+
+#full.data <- full.data %>% mutate(treatment.cohort = as.factor(ifelse(is.na(cancel.year) == TRUE | cancel.year == 2012, "Inf", 
+#                                                            ifelse(cancel.year < 2003, 0, 
+#                                                      ifelse(cancel.year == 2003, 1, 
+#                                                      ifelse(cancel.year >= 2004 & cancel.year <= 2007, 2,
+ #                                                     
+#                                                             ifelse(cancel.year >= 2008 & cancel.year <= 2010,
+#                                                                    4, 5)))))))
+
+#full.data <- full.data %>% mutate(relative.treatment.as = ifelse(treatment.cohort == "Inf", -1,
+#                                                                 calendar.period - #as.numeric(treatment.cohort)))
+
+#full.data <- dummy_cols(full.data, select_columns = c("treatment.cohort", "relative.treatment.as"))
+
+```
+
+```{r}
+full.data <- full.data %>% mutate(election.period = as.integer(election.period))
+full.data <- full.data %>% mutate(cancel.period = as.integer(cancel.period))
+
+full.data.table <- data.table(full.data)
+
+full.data <- full.data %>% mutate(rel.treat.time = ifelse(is.na(cancel.period) == TRUE, -1, election.period - cancel.period))
+
+
+
+full.data <- full.data %>%
+  mutate(rel.treat.time2 = rel.treat.time)
+
+full.data <- full.data %>%
+  mutate(value = 1,
+         rel.treat.time2 = paste0("rel.time", rel.treat.time2)) %>%
+  spread(rel.treat.time2, value, fill = 0)
+
+
+full.data <- full.data %>% mutate(cohort1 = ifelse(cancel.period == 1, 1, 0))
+full.data <- full.data %>% mutate(cohort2 = ifelse(cancel.period == 2, 1, 0))
+full.data <- full.data %>% mutate(cohort3 = ifelse(cancel.period == 3, 1, 0))
+full.data <- full.data %>% mutate(cohort4 = ifelse(cancel.period == 4, 1, 0))
+full.data <- full.data %>% mutate(cohort5 = ifelse(cancel.period == 5, 1, 0))
+full.data <- full.data %>% mutate(cohort6 = ifelse(cancel.period == 6, 1, 0))
+full.data <- full.data %>% mutate(cohort.untreat = ifelse(is.na(cancel.period) == T, 1, 0))
+
+
+full.data <- full.data %>%
+  mutate(ethnic.categorical2 = ethnic.categorical)
+
+full.data <- full.data %>%
+  mutate(value = 1,
+         ethnic.categorical2 = paste0("ethcat", ethnic.categorical2)) %>%
+  spread(ethnic.categorical2, value, fill = 0)
+
+```
+
+Comparing cohort 3 and 5
+```{r}
+full.0304 <- full.data %>% filter(year.x < 2007)
+full.0708 <- full.data %>% filter(year.x > 2004 & year.x < 2011)
+
+group.cohorts0304 <- full.0304 %>% filter(treatment_group == 1) %>% group_by(cancel.period)
+group.control0304 <- full.0304 %>% filter(treatment_group == 0)
+group.cohorts0708 <- full.0708 %>% filter(treatment_group == 1) %>% group_by(cancel.period)
+group.control0708 <- full.0708 %>% filter(treatment_group == 0)
+
+
+group.control0304 %>% summarise(
+  dem = mean(dem, na.rm=T),
+  opp_mayor = mean(opp_mayor1, na.rm=T),
+  margin = mean(margin, na.rm=T),
+  turnoutcoef = mean(turnout.coef, na.rm=T),
+  urv = mean(ur.voteshare, na.rm=T),
+  urmaj = mean(UR_majority, na.rm=T),
+  urgov = mean(urgov, na.rm=T),
+  nscoef = mean(nonstandard.coef, na.rm=T)
+)
+
+group.cohorts0304 %>% summarise(
+  dem = mean(dem, na.rm=T),
+  opp_mayor = mean(opp_mayor1, na.rm=T),
+  margin = mean(margin, na.rm=T),
+  turnoutcoef = mean(turnout.coef, na.rm=T),
+  urv = mean(ur.voteshare, na.rm=T),
+  urmaj = mean(UR_majority, na.rm=T),
+  urgov = mean(urgov, na.rm=T),
+  nscoef = mean(nonstandard.coef, na.rm=T)
+)
+
+group.control0708 %>% summarise(
+  dem = mean(dem, na.rm=T),
+  opp_mayor = mean(opp_mayor1, na.rm=T),
+  margin = mean(margin, na.rm=T),
+  turnoutcoef = mean(turnout.coef, na.rm=T),
+  urv = mean(ur.voteshare, na.rm=T),
+  urmaj = mean(UR_majority, na.rm=T),
+  urgov = mean(urgov, na.rm=T),
+  nscoef = mean(nonstandard.coef, na.rm=T)
+)
+
+
+group.cohorts0708 %>% summarise(
+  dem = mean(dem, na.rm=T),
+  opp_mayor = mean(opp_mayor1, na.rm=T),
+  margin = mean(margin, na.rm=T),
+  turnoutcoef = mean(turnout.coef, na.rm=T),
+  urv = mean(ur.voteshare, na.rm=T),
+  urmaj = mean(UR_majority, na.rm=T),
+  urgov = mean(urgov, na.rm=T),
+  nscoef = mean(nonstandard.coef, na.rm=T)
+)
+
+```
+
+
+
+Looking at balance; there isn't much difference on any of these dimensions except 'dem'.
+
+```{r}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+  
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+  
+  numPlots = length(plots)
+  
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                     ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+  
+  if (numPlots==1) {
+    print(plots[[1]])
+    
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+    
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+      
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+
+```{r}
+###Untreated vs. early treated
+treated.obs1 <- full.data %>% filter(year.x <= 2008)
+covs <- treated.obs1  %>% dplyr::select(nonstandard.coefs03, ur.coef.2003, ur.voteshare.2003,
+                             nonstandard.coefs04, ur.coef.2004, ur.voteshare.2004, dem, civsoc91,
+                             kprf99, education, pctRussian2002_new, opp_mayor1, ethnic.categorical)
+bal.tab(covs, treat = treated.obs1$treated.0708)
+p.bal.ns03 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "nonstandard.coefs03")
+p.bal.ns04 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "nonstandard.coefs04")
+p.bal.urc03 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.coef.2003") + labs(title = "", x = "United Russia manipulation coefficient\n (2003)")
+p.bal.urc04 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.coef.2004") +  labs(title = "", x = "United Russia manipulation coefficient\n (2004)")
+p.bal.urvs03 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.voteshare.2003") + labs(title = "", x = "United Russia vote-share\n (2003)")
+p.bal.urvs04 <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ur.voteshare.2004") + labs(title = "", x = "United Russia vote-share\n (2004)")
+p.bal.dem <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "dem")
+p.bal.rus <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "pctRussian2002_new")
+p.bal.opp <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "opp_mayor1") + labs(title = "Distributional Balance for 'opposition mayor', first wave", x = "Opposition mayor")
+p.bal.ethnic <- bal.plot(covs, treat = treated.obs1$treated.0708, var.name = "ethnic.categorical")
+
+
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.coef.2003, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.coef.2004, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.voteshare.2003, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(ur.voteshare.2004, na.rm=TRUE))
+full.data %>% group_by(treated.0708)  %>% summarise(means = mean(dem, na.rm=TRUE))
+
+###Early treated vs late treated
+treated.obs2 <- full.data %>% filter(year.x >= 2007 & treated.0708 == 0 | treated.1112 == 1)
+covs <- treated.obs2  %>% dplyr::select(nonstandard.coefs03, ur.coef.2003, ur.voteshare.2003,
+                             nonstandard.coefs04, ur.coef.2004, ur.voteshare.2004, ur.coef.2007, ur.voteshare.2007, ur.coef.2008, ur.voteshare.2008,  dem, civsoc91,
+                             kprf99, education, pctRussian2002_new, opp_mayor1, ethnic.categorical)
+bal.tab(covs, treat = treated.obs2$treated.1112)
+p.bal.ns03.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "nonstandard.coefs03")
+p.bal.ns04.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "nonstandard.coefs04")
+p.bal.urc03.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2003")
+p.bal.urc04.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2004")
+p.bal.urvs03.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2003")
+p.bal.urvs04.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2004")
+p.bal.urc07.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2007")
+p.bal.urvs07.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2007")
+p.bal.urc08.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.coef.2008")
+p.bal.urvs08.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ur.voteshare.2008")
+p.bal.dem.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "dem")
+p.bal.rus.2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "pctRussian2002_new")
+p.bal.opp2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "opp_mayor1") + labs(title = "Distributional Balance for 'opposition mayor'", x = "Opposition mayor")
+p.bal.ethnic2 <- bal.plot(covs, treat = treated.obs2$treated.1112, var.name = "ethnic.categorical")
+
+
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.coef.2007, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.coef.2008, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.voteshare.2007, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(ur.voteshare.2008, na.rm=TRUE))
+treated.obs %>% group_by(treated.1112)  %>% summarise(means = mean(dem, na.rm=TRUE))
+
+###Multiplotting
+multiplot(p.bal.urc03, p.bal.urc04, p.bal.urvs03, p.bal.urvs04, cols= 2)
+
+multiplot(p.bal.urc07.2, p.bal.urc08.2, p.bal.urvs07.2, p.bal.urvs08.2, cols= 2)
+
+
+```
+
+
+Using Reuter et al models to predict treatment cohorts
+
+Update new data from missing cities to include the variables lagged voteshare etc.
+
+```{r}
+model1 <- glm(cancel.period_3 ~ margin + lagged.urvoteshare.parl + lagged.urvoteshare.pres + lagged.turnout.coef.parl + lagged.turnout.coef.pres + naive_counter + naive_counter2 + naive_counter3 + 
+                twoyrdum2 +
+              twoyrdum3 +
+              twoyrdum4 +
+              twoyrdum5 +
+              twoyrdum6 +
+              twoyrdum7,
+              data = full.data)
+summary(model1)
+
+model2 <- glm(cancel.period_5 ~ margin + lagged.urvoteshare.parl + lagged.urvoteshare.pres + lagged.turnout.coef.parl + lagged.turnout.coef.pres  + naive_counter + naive_counter2 + naive_counter3 + 
+                twoyrdum2 +
+              twoyrdum3 +
+              twoyrdum4 +
+              twoyrdum5 +
+              twoyrdum6 +
+              twoyrdum7,
+              data = subset(full.data, full.data$cancel.period_3 == 0))
+summary(model2)
+
+model3 <- glm(cancel.period_6 ~ margin + lagged.urvoteshare.parl + lagged.urvoteshare.pres + lagged.turnout.coef.parl + lagged.turnout.coef.pres + naive_counter + naive_counter2 + naive_counter3 + 
+                twoyrdum2 +
+              twoyrdum3 +
+              twoyrdum4 +
+              twoyrdum5 +
+              twoyrdum6 +
+              twoyrdum7,
+              data = subset(full.data, full.data$cancel.period_3 == 0 & full.data$cancel.period_5 == 0))
+summary(model3)
+
+
+model4 <- glm(cancel.period_3 ~ margin*ur.voteshare.2003 + margin*ur.voteshare.2004 + naive_counter + naive_counter2 + naive_counter3 + 
+                twoyrdum2 +
+              twoyrdum3 +
+              twoyrdum4 +
+              twoyrdum5 +
+              twoyrdum6 +
+              twoyrdum7,
+              data = subset(full.data, full.data$year.x <= 2004))
+summary(model4)
+
+```
+
+Baseline 2WFE
+
+```{r}
+model.tc.base <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + non.opp.treated + opp.treated +  factor(years.since.treatment) , data = full.data)
+summary(model.tc.base)
+
+model.tc.base2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x)  +  non.opp.treated +  opp.treated*years.since.treatment + urgov + mayor.tenure, data = full.data)
+summary(model.tc.base2)
+
+model.tc.base3 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + non.opp.treated +  years.since.treatment + opp.treated*I(years.since.treatment^2), data = full.data)
+summary(model.tc.base3)
+```
+
+```{r}
+model.tc.opp <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + factor(years.since.treatment) , data = full.data %>% filter(treatment_group_opp == 1 | treatment_group == 0))
+summary(model.tc.opp)
+
+model.tc.opp2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + years.since.treatment, data = full.data%>% filter(treatment_group_opp == 1 | treatment_group == 0))
+summary(model.tc.opp2)
+
+model.tc.opp3 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + years.since.treatment + I(years.since.treatment^2), data = full.data%>% filter(treatment_group_opp == 1 | treatment_group == 0))
+summary(model.tc.opp3)
+```
+
+```{r}
+model.tc.nonopp <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + factor(years.since.treatment) , data = full.data %>% filter((treatment_group_opp == 0 & treatment_group == 1) | treatment_group == 0))
+summary(model.tc.nonopp)
+
+model.tc.nonopp2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + years.since.treatment, data = full.data%>%filter((treatment_group_opp == 0 & treatment_group == 1) | treatment_group == 0))
+summary(model.tc.nonopp2)
+
+model.tc.nonopp3 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + years.since.treatment + I(years.since.treatment^2), data = full.data%>% filter((treatment_group_opp == 0 & treatment_group == 1) | treatment_group == 0))
+summary(model.tc.nonopp3)
+```
+
+
+Models with opp transition vs non opp transition
+
+```{r}
+model.tc.transtype1 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  opp.treated + non.opp.treated*factor(years.since.treatment)
+                   + urgov + mayor.tenure, data = full.data)
+summary(model.tc.transtype1)
+```
+
+
+```{r}
+model.tc.transtype2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +   non.opp.treated + opp.treated*factor(years.since.treatment)
+                   + urgov + mayor.tenure, data = full.data)
+summary(model.tc.transtype2)
+```
+
+
+Classic, static specification
+
+```{r}
+model.tc.static <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  relative.treatment_1 + relative.treatment_2 + relative.treatment_3 + relative.treatment_4 + relative.treatment_5 + relative.treatment_6 + relative.treatment_7 + relative.treatment_8 
+                   + urgov + mayor.tenure, data = full.data %>% filter(opp.treated == 0))
+summary(model.tc.static)
+```
+
+Classic 'dynamic' model
+
+```{r}
+model.tc.dyn <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  relative.treatment_1 + relative.treatment_2 + relative.treatment_3 + relative.treatment_4 + relative.treatment_5 + relative.treatment_6 + relative.treatment_7 + relative.treatment_8 + appointed.transition + elected.transition 
+                   + urgov + mayor.tenure, data = full.data)
+summary(model.tc.dyn)
+```
+
+
+
+```{r}
+model.ur.dyn <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + `relative.treatment_-8` + `relative.treatment_-7` + `relative.treatment_-6` + `relative.treatment_-5` + `relative.treatment_-4` + `relative.treatment_-3` + `relative.treatment_-2` + `relative.treatment_-1` +
+                     relative.treatment_1 + relative.treatment_2 + relative.treatment_3 + relative.treatment_4 + relative.treatment_5 + relative.treatment_6 + relative.treatment_7 + relative.treatment_8
+                   + urgov + mayor.tenure + turnout.coef, data = full.data)
+summary(model.ur.dyn)
+```
+
+```{r}
+full.data <- full.data %>% mutate(binned.neg.7_8 =  `relative.treatment_-8` + `relative.treatment_-7`)
+full.data <- full.data %>% mutate(binned.neg.6_5 =  `relative.treatment_-6` + `relative.treatment_-5`)
+full.data <- full.data %>% mutate(binned.neg.4_3 =  `relative.treatment_-4` + `relative.treatment_-3`)
+
+
+full.data <- full.data %>% mutate(binned.pos.7_8 =  relative.treatment_8 + relative.treatment_7)
+full.data <- full.data %>% mutate(binned.pos.6_5 =  relative.treatment_6 + relative.treatment_5)
+
+model.tc.dyn <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  binned.neg.7_8 + binned.neg.6_5 + binned.neg.4_3 + `relative.treatment_-2` + `relative.treatment_-1` +
+                     relative.treatment_1 + relative.treatment_2 + relative.treatment_3 + relative.treatment_4 + binned.pos.6_5 + binned.pos.7_8 
+                   + urgov + mayor.tenure, data = full.data)
+summary(model.tc.dyn)
+```
+
+```{r include = FALSE}
+stargazer(model.tc.dyn, type="html", omit = "factor", out="table_app_eventstudy.html")
+```
+
+Callaway and Sant'Anna; Mostly working, but some lack of clarity in documentation
+
+Note that this focuses on nonstandard.coef as DV.
+
+So: wave 2 differs from wave 1 in that wave 2 tends to focus on more democratic, oppositional, and non-ethnic cities. So first wave is about targeting pro-regime shirkers? Hence the improvement at first. Second wave is about  
+
+```{r callaway manipulation opp transition}
+
+dataset.sub <- full.data %>% filter(non.opp.treated == 0) %>% dplyr::select(poppopprop, education, lnAvgSalary, exec.first.election, mayor.tenure, urgov, ethnic.categorical, cancel.period, calendar.period, presidential, city_id, opp.treated, nonstandard.coef, turnout.coef, ur.voteshare, years.since.treatment)
+
+dataset.sub <- na.omit(dataset.sub)
+#dataset.sub <- dataset.sub %>% filter(cancel.period != 4)
+
+summary(lm(turnout.coef ~  mayor.tenure + urgov + ethnic.categorical + lnAvgSalary + education + poppopprop + years.since.treatment, data=dataset.sub))
+
+out1.null <- mp.spatt(turnout.coef ~ treatment_group, xformla=~ NULL, data=dataset.sub %>% filter(cancel.period != 6),
+                        panel=T, first.treat.name="cancel.period",
+                        idname="city_id", tname="calendar.period",
+                        bstrap=TRUE, clustervars = "city_id", citers = 500, se=TRUE, seedvec = 11532, cband=FALSE)
+summary(out1.null)
+summary(out1.null$aggte)
+ggdid(out1.null)
+
+
+out1.covars <- mp.spatt(turnout.coef ~ treatment_group, xformla=~ mayor.tenure + urgov + lnAvgSalary + poppopprop + ethnic.categorical , data=dataset.sub,
+                        panel=T, first.treat.name="cancel.period",
+                        idname="city_id", tname="calendar.period",
+                        bstrap=TRUE, clustervars = "city_id", citers = 500, se=TRUE, seedvec = 11532, cband=FALSE)
+summary(out1.covars)
+summary(out1.covars$aggte)
+ggdid(out1.covars) 
+
+
+```
+
+```{r callaway manipulation nonopp transition}
+
+dataset.sub <- full.data %>% dplyr::select(poppopprop, education, lnAvgSalary, mayor.tenure, urgov, ethnic.categorical, cancel.period, calendar.period, city_id, nonstandard.coef, turnout.coef, ur.voteshare)
+
+dataset.sub <- na.omit(dataset.sub)
+#dataset.sub <- dataset.sub %>% filter(cancel.period != 4)
+
+#summary(lm(turnout.coef ~ non.opp.treated + mayor.tenure + urgov + ethnic.categorical + lnAvgSalary + education + poppopprop, data=dataset.sub))
+
+out1.null <- mp.spatt(turnout.coef ~ treatment_group, xformla=~ NULL, data=dataset.sub,
+                        panel=T, first.treat.name="cancel.period",
+                        idname="city_id", tname="calendar.period",
+                        bstrap=TRUE, clustervars = "city_id", citers = 500, se=TRUE, seedvec = 11532, cband=FALSE)
+summary(out1.null)
+summary(out1.null$aggte)
+ggdid(out1.null)
+
+
+out1.covars <- mp.spatt(turnout.coef ~ treatment_group, xformla=~ mayor.tenure + urgov + lnAvgSalary + education + poppopprop + ethnic.categorical, data=dataset.sub,
+                        panel=T, first.treat.name="cancel.period",
+                        idname="city_id", tname="calendar.period",
+                        bstrap=TRUE, clustervars = "city_id", citers = 500, se=TRUE, seedvec = 11532, cband=FALSE)
+summary(out1.covars)
+summary(out1.covars$aggte)
+ggdid(out1.covars) 
+
+
+```
+
+
+```{r callaway voteshare}
+out2 <- mp.spatt(ur.voteshare ~ treatment_group, xformla=~mayor.tenure + urgov + turnout.coef, data=subset(full.data, is.na(full.data$urgov)==F),
+                        panel=T, first.treat.name="cancel.period",
+                        idname="city_id", tname="calendar.period",
+                        bstrap=FALSE, se=TRUE, cband=FALSE)
+summary(out2)
+ggdid(out2)
+```
+
+Abraham and Sun--still broken no matter how I code the cohorts
+
+```{r}
+##Step 1
+model.ur.as <- lm(ur.voteshare ~  factor(city_id) + factor(year.x) + urgov + mayor.tenure +
+                  
+                   treatment.cohort_2:`relative.treatment.as_-3` +
+                   treatment.cohort_2:`relative.treatment.as_-2` +
+                   treatment.cohort_2:relative.treatment.as_0 +
+                   treatment.cohort_2:relative.treatment.as_1 +
+                   treatment.cohort_2:relative.treatment.as_2 +
+                   treatment.cohort_2:relative.treatment.as_3 +
+                   treatment.cohort_2:relative.treatment.as_4 +
+                   
+                   treatment.cohort_4:`relative.treatment.as_-3` +
+                   treatment.cohort_4:`relative.treatment.as_-2` +
+                   treatment.cohort_4:relative.treatment.as_0 +
+                   treatment.cohort_4:relative.treatment.as_1 +
+                   treatment.cohort_4:relative.treatment.as_2 +
+                   treatment.cohort_4:relative.treatment.as_3 +
+                   treatment.cohort_4:relative.treatment.as_4 +
+                   treatment.cohort_5:`relative.treatment.as_-3` +
+                   treatment.cohort_5:`relative.treatment.as_-2` +
+                   treatment.cohort_5:relative.treatment.as_0 +
+                   treatment.cohort_5:relative.treatment.as_1 +
+                   treatment.cohort_5:relative.treatment.as_2 +
+                   treatment.cohort_5:relative.treatment.as_3 +
+                   treatment.cohort_5:relative.treatment.as_4
+
+                 , data = full.data)
+summary(model.ur.as)
+
+```
+
+
+Abraham and Sun--working now, though likely will tweak as I understand the setup more
+
+```{r}
+##Step 1
+model.tc.as <- lm(turnout.coef ~  factor(city_id) + factor(year.x) + urgov + mayor.tenure + years.since.treatment  +
+                  
+                   treatment.cohort_2:`relative.treatment.as_-3` +
+                   treatment.cohort_2:`relative.treatment.as_-2` +
+                   treatment.cohort_2:relative.treatment.as_0 +
+                   treatment.cohort_2:relative.treatment.as_1 +
+                   treatment.cohort_2:relative.treatment.as_2 +
+                   treatment.cohort_2:relative.treatment.as_3 +
+                   treatment.cohort_4:`relative.treatment.as_-3` +
+                   treatment.cohort_4:`relative.treatment.as_-2` +
+                   treatment.cohort_4:relative.treatment.as_0 +
+                   treatment.cohort_4:relative.treatment.as_1 +
+                   treatment.cohort_4:relative.treatment.as_2 +
+                   treatment.cohort_4:relative.treatment.as_3 +
+                   treatment.cohort_4:relative.treatment.as_4 +
+                   treatment.cohort_5:`relative.treatment.as_-3` +
+                   treatment.cohort_5:`relative.treatment.as_-2` +
+                   treatment.cohort_5:relative.treatment.as_0 +
+                   treatment.cohort_5:relative.treatment.as_1 +
+                   treatment.cohort_5:relative.treatment.as_2
+                  
+
+                 , data = full.data)
+summary(model.tc.as)
+```
+
+
+
+
+
+Where I am: It seems that this is the most theoretically appropriate way to go. I.e. 2WFE causes problems as A and S argue, and I think reviewers will not like it as an approach. It seems clear that the negative effect on the +1 relative treatment coefficient is a cohort effect rather than a timing effect, so this is more appropriate. The next step is to figure out how they calculate variance in order to get SEs
+
+```{r}
+##Step two: Finding the cohort weights by relative period
+#Not totally clear, but I think you only do post-treatment periods
+period_neg3 <- full.data %>% filter(relative.treatment.as == -3)
+period_neg2 <- full.data %>% filter(relative.treatment.as == -2)
+period_neg1 <- full.data %>% filter(relative.treatment.as == -1)
+period_0 <- full.data %>% filter(relative.treatment.as == 0)
+period_1 <- full.data %>% filter(relative.treatment.as == 1)
+period_2 <- full.data %>% filter(relative.treatment.as == 2)
+period_3 <- full.data %>% filter(relative.treatment.as == 3)
+
+
+table1 <- data.frame(matrix(nrow= 5, ncol = 2, NA))
+table1 <- table1 %>% rename(treatment.cohort = X1)
+table1 <- table1 %>% rename(calendar.period = X2)
+
+table.all <- with(full.data, table(treatment.cohort, relative.treatment.as))
+sum_neg3 <- 7
+sum_neg2 <- 37
+sum_neg1 <- 360+27+30+7
+sum_0 <- 64
+sum_1 <- 64
+sum_2 <- 63
+sum_3 <- 27 + 29
+
+w.cohortInf.neg3 <- 0
+w.cohortInf.neg2 <- 0
+w.cohortInf.neg1 <- 360 / sum_neg1
+w.cohortInf.0 <- 0
+w.cohortInf.1 <- 0
+w.cohortInf.2 <- 0
+w.cohortInf.3 <- 0
+
+w.cohort2.neg3 <- 0
+w.cohort2.neg2 <- 30 / 37
+w.cohort2.neg1 <- 30 / sum_neg1
+w.cohort2.0 <- 30 / sum_0
+w.cohort2.1 <- 30 / sum_1
+w.cohort2.2 <- 30 / sum_2
+w.cohort2.3 <- 29 / sum_3
+
+w.cohort4.neg3 <- 0
+w.cohort4.neg2 <- 0
+w.cohort4.neg1 <- 27 / sum_neg1
+w.cohort4.0 <- 27 / sum_0
+w.cohort4.1 <- 27 / sum_1
+w.cohort4.2 <- 27 / sum_2
+w.cohort4.3 <- 27 / sum_3
+
+w.cohort5.neg3 <- 7
+w.cohort5.neg2 <- 7
+w.cohort5.neg1 <- 7 / sum_neg1
+w.cohort5.0 <- 7 / sum_0
+w.cohort5.1 <- 7 / sum_1
+w.cohort5.2 <- 6 / sum_2
+w.cohort5.3 <- 0
+
+weighted.coef.co2.neg2 <- -0.021099 * w.cohort2.neg2
+weighted.coef.co2.0 <- -0.062681 * w.cohort2.0
+weighted.coef.co2.1 <- -0.046121 * w.cohort2.1
+weighted.coef.co2.2 <- -0.206669 * w.cohort2.2
+weighted.coef.co2.3 <- -0.214004 * w.cohort2.3
+
+
+weighted.coef.co4.0 <- 0.039165  * w.cohort4.0
+weighted.coef.co4.1 <- -0.005423 * w.cohort4.1
+weighted.coef.co4.2 <- 0.010439 * w.cohort4.2
+weighted.coef.co4.3 <- -0.130649 * w.cohort4.3
+
+weighted.coef.co5.neg3 <- 0.037405  * w.cohort5.neg3
+weighted.coef.co5.neg2 <- 0.084862 * w.cohort5.neg2
+weighted.coef.co5.0 <- -0.035830 * w.cohort5.0
+weighted.coef.co5.1 <- -0.014431 * w.cohort5.1
+weighted.coef.co5.2 <- -0.076325 * w.cohort5.2
+
+period.sum.neg3 <- weighted.coef.co5.neg3
+period.sum.neg2 <- weighted.coef.co2.neg2 + weighted.coef.co5.neg2
+period.sum.0 <- weighted.coef.co2.0 + weighted.coef.co4.0 + weighted.coef.co5.0
+period.sum.1 <- weighted.coef.co2.1 + weighted.coef.co4.1 + weighted.coef.co5.1
+period.sum.2 <- weighted.coef.co2.2 + weighted.coef.co4.2 + weighted.coef.co5.2
+period.sum.3 <- weighted.coef.co2.3 + weighted.coef.co4.3
+
+overall.sum <-  period.sum.0 + period.sum.2 + period.sum.2 + period.sum.3
+IW.estimate <- overall.sum / 4  #Number of post-treatment periods
+
+
+```
+
+
+
+Looking at leaders' first election dummies. These basic results show that appointed execs deliver more manipulation when it is *not* their first election, compared to electeds. Need to think if this addresses Ted's comment about the handover from one appointed exec to another.
+
+```{r}
+###Manipulation model
+model.tc.firstelex.all <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + exec.first.election
+                   + urgov + exec.first.election*appointed.exec, data = full.data)
+summary(model.tc.firstelex.all)
+interplot(model.tc.firstelex.all, var1 = "appointed.exec", var2 = "exec.first.election")
+interplot(model.tc.firstelex.all, var2 = "appointed.exec", var1 = "exec.first.election")
+
+
+###Voteshare model
+model.vs.firstelex.all <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + turnout.coef + exec.first.election
+                   + urgov + exec.first.election*appointed.exec, data = full.data)
+summary(model.vs.firstelex.all)
+interplot(model.vs.firstelex.all, var1 = "appointed.exec", var2 = "exec.first.election")
+interplot(model.vs.firstelex.all, var2 = "appointed.exec", var1 = "exec.first.election")
+
+```
+
+Using elected / appointed transition dummies
+
+Transitions across regimes (elected to appointed) reduces manipulation; appointed-appointed and elected-elected do not. Newly elected mayors are marginally better at delivering clean votes. 
+```{r}
+###Manipulation model
+model.tc.transition <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + elected.transition + appointed.transition + cross.regime.transition + urgov, data = full.data)
+summary(model.tc.transition)
+
+
+###Voteshare model
+model.vs.transition <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + turnout.coef + elected.transition + appointed.transition + cross.regime.transition
+                   + urgov, data = full.data)
+summary(model.vs.transition)
+
+stargazer(model.tc.transition, model.vs.transition, type="html", omit = "factor", out="table_app_transition_dummies.html")
+
+```
+
+
+eventStudy package
+
+Overall UR result
+
+```{r}
+full.data <- full.data %>% mutate(election.period = as.integer(election.period))
+full.data <- full.data %>% mutate(cancel.period = as.integer(cancel.period))
+full.data <- full.data %>% mutate(ethcatNon_ethnic = `ethcatNon-ethnic`)
+
+full.data.table <- data.table(full.data)
+full.data.table <- full.data.table %>% filter(is.na(urgov) == F)
+results <- ES(long_data=full.data.table, outcomevar="ur.voteshare", 
+              unit_var="city_id", cal_time_var="election.period", 
+              onset_time_var="cancel.period", cluster_vars="city_id",
+              omitted_event_time = -1,
+             never_treat_action = "none" #Keep means controls are never-treated + not-yet-treated
+,
+              residualize_covariates = TRUE,
+               discrete_covars = c('urgov'),
+               cont_covars = c('turnout.coef'))
+
+ES_plot_levels(results, omitted_event_time = -1) + ylab("Mean of the Outcome")
+
+ES_plot_ATTs(results, omitted_event_time = -1) + ylab("ATT Estimate (95% CI)")
+
+ES_plot_ATTs(results, homogeneous_ATT = TRUE, omitted_event_time = -1) + ylab("ATT Estimate (95% CI)")
+
+```
+
+Plotting 
+
+
+```{r}
+catts <- subset(results, results$rn == "catt")
+catts <- catts %>% mutate(est.high = estimate + cluster_se *1.65)
+catts <- catts %>% mutate(est.low = estimate - cluster_se * 1.65)
+catts <- catts %>% mutate(event.time.dodge = ifelse(ref_onset_time == 3, ref_event_time - .2, ifelse(
+  ref_onset_time == 4, ref_event_time - .1, ifelse(
+    ref_onset_time == 5, ref_event_time, ref_event_time + .1
+  )
+)))
+
+p <- ggplot(catts, aes(event.time.dodge, estimate, color = ref_onset_time))
+p <- p + geom_point()
+p + geom_errorbar(aes(ymin = est.low, ymax = est.high), width = .1) + geom_hline(yintercept = 0, linetype = 2) + scale_x_continuous(limits = c(-5, 3)) + labs(x = "Relative time (0 = first year treated)", y = "Cohort ATTs", color = "Cancelation period") +
+  theme_bw()
+
+```
+
+
+##Manipulation
+
+
+```{r}
+full.data.table <- data.table(full.data) %>% mutate(election.period.small = as.integer(election.period.small))
+
+
+results2 <- ES(long_data=full.data.table, outcomevar="turnout.coef", 
+              unit_var="city_id", cal_time_var="election.period", 
+              onset_time_var="cancel.period", cluster_vars="city_id",
+             never_treat_action = "keep",
+             omitted_event_time = -1, linearize_pretrends = F,
+             # residualize_covariates = TRUE,
+               discrete_covars = c('urgov'),
+               cont_covars = c('mayor.tenure'))
+
+ES_plot_levels(results2) + ylab("Mean of the Outcome")
+
+ES_plot_ATTs(results2) + ylab("ATT Estimate (95% CI)")
+
+ES_plot_ATTs(results2, homogeneous_ATT = TRUE) + ylab("ATT Estimate (95% CI)")
+```
+
+
+Attempting to plot on my own
+
+Means
+
+```{r}
+treat.means <- subset(results2, results2$rn == "treatment_means")
+
+treat.means <- treat.means %>% mutate(period = as.numeric(ref_onset_time) + ref_event_time)
+
+
+p <- ggplot(treat.means, aes(period, estimate, color = ref_onset_time))
+p <- p + geom_point()
+p + geom_line(aes(color = ref_onset_time, linetype = as.factor(treated)))  + labs(x = "Election period", y = "Cohort means", color = "Cancelation period", linetype = "Treated") +
+  theme_bw() + geom_vline(xintercept = 3, color = "#CC3333", linetype = 4) + geom_vline(xintercept = 4, color = "#669933", linetype = 4) + geom_vline(xintercept = 5, color = "#00FFFF", linetype = 4) +
+  geom_vline(xintercept = 6, color = "#9933FF", linetype = 4)
+```
+
+
+CATTs
+
+```{r}
+catts <- subset(results2, results2$rn == "catt")
+catts <- catts %>% mutate(est.high = estimate + cluster_se *1.65)
+catts <- catts %>% mutate(est.low = estimate - cluster_se * 1.65)
+catts <- catts %>% mutate(event.time.dodge = ifelse(ref_onset_time == 3, ref_event_time - .2, ifelse(
+  ref_onset_time == 4, ref_event_time - .1, ifelse(
+    ref_onset_time == 5, ref_event_time, ref_event_time + .1
+  )
+)))
+
+p <- ggplot(catts, aes(event.time.dodge, estimate, color = ref_onset_time))
+p <- p + geom_point()
+p + geom_errorbar(aes(ymin = est.low, ymax = est.high), width = .1) + geom_hline(yintercept = 0, linetype = 2) + scale_x_continuous(limits = c(-5, 3)) + labs(x = "Relative time (0 = first year treated)", y = "Cohort ATTs", color = "Cancelation period") +
+  theme_bw()
+```
+
+
+Homogenous ATTs
+
+```{r}
+coefs.homog <- tidy(model.tc.dyn, conf.int = TRUE, conf.level = .90)
+coefs.homog.select <- coefs.homog[129:136,]
+coefs.homog.select <- coefs.homog.select %>% mutate(rel.time = c(-5, -4, -3, -2, -1, 1, 2, 3))
+new.row <- c(rep(NA, 7), 0)
+coefs.homog.select <- rbind(coefs.homog.select, new.row)
+
+att.plot <- ggplot(coefs.homog.select, aes(x = rel.time, y = estimate)) + geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) + labs(title = "OLS estimates of relative time to treatment\n (90% confidence intervals)", x = "Time to treatment", y = "Estimate") + theme_bw()
+
+```
+
+
+##Example from package
+
+
+```{r}
+# simulate the data with 1000 individuals (use only the first element)
+sim_data <- ES_simulate_data(units = 1000)[["observed"]]
+# view the simulated data
+sim_data[]
+```
+
+
+```{r}
+# coding some observations as never-winners
+sim_data2 <- copy(sim_data)
+unit_var = "individual"
+onset_time_var = "treatment_year"
+sim_data2[, recode := runif(1, min = 0, max = 1), list(get(unit_var))]
+sim_data2[recode < 0.10, (onset_time_var) := NA]
+```
+
+```{r}
+results3 <- ES(long_data=sim_data2, outcomevar="outcome", 
+               unit_var="individual", cal_time_var="year", 
+               onset_time_var="treatment_year", cluster_vars="individual", 
+               never_treat_action = "only")
+
+ES_plot_levels(results3) + ylab("Mean of the Outcome")
+
+ES_plot_ATTs(results3, omitted_event_time = -1) + ylab("ATT Estimate (95% CI)")
+```
+
+
+###Mayor's margin
+Reuter et al focus on mayor's margin as a measure of political machine strength. Does this predict my DVs?
+
+```{r}
+margin.urvs <- lm(ur.voteshare ~  margin urgov + ethnic.categorical + lnAvgSalary + presidential + mayor.tenure + treated.0708 + treated.1112, data= full.data)
+summary(margin.urvs) 
+
+margin.ur.clean <- lm(ur.voteshare ~ turnout.coef + margin + urgov + ethnic.categorical + lnAvgSalary + presidential, data= full.data)
+summary(margin.ur.clean) 
+
+margin.tc <- lm(turnout.coef ~ margin + urgov + ethnic.categorical + lnAvgSalary + presidential, data= full.data)
+summary(margin.tc) 
+
+margin.ns <- lm(nonstandard.coef ~ margin + urgov + ethnic.categorical + lnAvgSalary + presidential, data= full.data)
+summary(margin.ns) 
+```
+
+Second wave treatment cities delivered less manipulation overall. Early wave also delivered more nonstandard mobilization
+```{r}
+margin.tc2 <- lm(turnout.coef ~ treated.0708 + treated.1112 + urgov + ethnic.categorical + lnAvgSalary + presidential, data= subset(full.data, full.data$year.x < 2011))
+summary(margin.tc2) 
+
+margin.ns2 <- lm(nonstandard.coef ~  treated.0708 + treated.1112 + urgov + ethnic.categorical + lnAvgSalary + presidential, data= subset(full.data, full.data$year.x < 2011))
+summary(margin.ns2) 
+```
+
+
+As in Reuter et al, untreated group has higher margin. However, among treated groups, early treated were higher than later treated
+
+```{r}
+full.data %>% group_by(cancel.period) %>% summarize(mean = mean(margin, na.rm=TRUE))
+```
+
+Might be worthwhile to do a second paper on who manipulation figures in to cancelation, using Reuter et al data combined with my own. Hurdle would just be joining election results by city id and year, and then carrying results forward when there is no election. I.e. 2004 result needs to carry forward to 2005 - 2007, etc.

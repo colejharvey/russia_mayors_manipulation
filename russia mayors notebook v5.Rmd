@@ -1,0 +1,624 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup}
+library(readxl)
+library(tidyverse)
+library(CBPS)
+library(lmtest)  #Getting clustered sEs 
+library(sandwich)
+library(ggplot2)
+library(stargazer)
+library(interplot)
+library(did)
+```
+
+
+```{r}
+full.data <- read.csv("cleaned data full all years.csv")
+
+
+full.data <- full.data %>% mutate(years.since.treat = ifelse(is.na(cancel.year) == TRUE | cancel.year > year.x, 0, (year.x - cancel.year) + 1))
+
+#full.data <- full.data %>% mutate(treat.weight.year = ifelse(treated.0708 == 1, treated.0708 / years.since.treat, 0))
+
+full.data <- full.data %>% mutate(years_with_elections = ifelse(is.na(cancel.year) == TRUE, year.x - 2003, year.x - cancel.year))
+
+full.data <- full.data %>% mutate(turnout.coef.susp = ifelse(turnout.coef >= 1, 1, 0))
+
+
+full.data <- full.data %>% mutate(time.period = ifelse(year.x == 2003 | year.x == 2004, 0, ifelse(year.x
+                                  == 2007 | year.x == 2008, 1,
+                                  2)))
+
+full.data <- full.data %>% mutate(treat.cohort = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year >= 2004 &                                                  cancel.year <= 2007, 1, 2)))
+
+#full.data <- full.data %>% mutate(time.period = ifelse(year.x == 2003, 0, ifelse(year.x
+#                                  == 2004, 1,
+#                                  ifelse(year.x == 2007, 2,
+#                                         ifelse(year.x == 2008, 3,
+#                                                ifelse(year.x == 2011, 4, 5))))))
+
+#full.data <- full.data %>% mutate(treat.cohort = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(cancel.year >= 2004 &  #                                                cancel.year < 2007, 2,  
+#                                              ifelse(cancel.year == 2007, 3, ifelse(cancel.year >= 2008 & cancel.year < 2011, 4, 5)))))
+                   
+
+full.data <- full.data %>% mutate(rel.treat.time = ifelse(is.na(cancel.year) == TRUE, 0, time.period - treat.cohort))
+
+full.data <- full.data %>% mutate(treat.cohort = factor(treat.cohort))
+
+#Next make individual variables for each level of the factor; also try the same approach with only three periods (year <= 2004 = 0, year <=2008 = 1, year <= 2012 = 2)
+
+
+full.data <- full.data %>% mutate(treat.posttreat = ifelse(is.na(cancel.year) == TRUE, 0, ifelse(year.x < cancel.year, 0, 1)))
+full.data <- full.data %>% mutate(treatment.group.all = ifelse(is.na(cancel.year) == TRUE, 0, 1))
+full.data <- full.data %>% mutate(treat.posttreat.weight = ifelse(treatment.group.all == 0, 0, ifelse(year.x < cancel.year, 0, treat.posttreat / ((year.x - cancel.year)+1))))
+full.data <- full.data %>% mutate(sqrt(treat.posttreat.weight))
+full.data <- full.data %>% mutate(treat.posttreat.weight.center = scale(treat.posttreat.weight, scale = FALSE))
+  #Elected mayors weighted zero, weight increases as managers are more recent
+  #Logic being that long experience with appointed managers will come to resemble electeds
+
+full.data.control <- full.data %>% filter(is.na(cancel.year) == TRUE)
+full.data.t0708 <- full.data %>% filter(cancel.year <= 2007)
+full.data.0708 <- rbind(full.data.control, full.data.t0708)
+
+full.data <- 
+    full.data %>%
+    group_by(city_id) %>%
+    mutate(lag.manipulation = dplyr::lag(turnout.coef, n = 1, default = NA)) #Lagging manipulation
+
+full.data <- full.data %>% mutate(elected.transition = ifelse(year.x < cancel.year & exec.first.election == 1, 1, 0))
+full.data <- full.data %>% mutate(appointed.transition = ifelse(year.x >= cancel.year & cross.regime.transition == 0 & exec.first.election == 1, 1, 0))
+
+```
+
+##CBPS with censored obs
+
+CBPS version here excludes observations past treatment, by attaching the future versions of each variable to the treatment and pre-treatment obs
+For the 2007 - 08 elections
+
+```{r}
+full.data.0708 <- subset(full.data.0708, full.data.0708$year.x >= 2007) 
+myvars <- c("city_id", "year.x", "city_mayor", "nonstandard.coef", "ur.voteshare", "turnout.coef",  "treated.0708", "margin_pretreat_final", "regelect_margin_pretreat_final",
+                "ethnic.categorical",  "urgov", "outcome.mayor.tenure",
+                 "lnAvgSalary", "avgsalary.pretreat.avg_final", "poppopprop",  "unemployrate",  "dem",  "education", "presidential", "regmarginXmargin_pretreat_final", "mayor.tenure", "nonstandard.coefs07", "nonstandard.coefs08",
+            "nonstandard.coefs11", "nonstandard.coefs12", "ur.coef.2007", "ur.coef.2008", "ur.coef.2011",
+            "ur.coef.2012", "ur.voteshare.2007", "ur.voteshare.2008", "ur.voteshare.2011", "ur.voteshare.2012", "years.since.treat", "turnout.coef.susp")
+            #, "regmarginXmargin", "year.x", "margin", "regelect_margin", "regmargin.timeaverage", "regmarginXmargin.timeaverage")
+   
+dataset.matching <- full.data.0708[myvars]
+dataset.matching.complete <- na.omit(dataset.matching)
+   
+cbps.out.0708 <- CBPS(treated.0708 ~ margin_pretreat_final + regelect_margin_pretreat_final +
+                        dem + mayor.tenure +
+                        poppopprop +  avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final,
+                      data=dataset.matching.complete)
+summary(cbps.out.0708)
+bal.firstround <- CBPS::balance(cbps.out.0708)
+bal.firstround
+```
+
+```{r}
+cbps.data <- cbps.out.0708$data
+
+cbps.data <- cbps.data %>% mutate(nonstandardcoef.p2 = ifelse(year.x == 2007, nonstandard.coefs07, ifelse(
+  year.x == 2008, nonstandard.coefs08, ifelse(
+    year.x == 2011, nonstandard.coefs11, nonstandard.coefs12
+  )
+)))
+
+cbps.data <- cbps.data %>% mutate(turnoutcoef.p2 = ifelse(year.x == 2007, ur.coef.2007, ifelse(
+  year.x == 2008, ur.coef.2008, ifelse(
+    year.x == 2011, ur.coef.2011, ur.coef.2012
+  )
+)))
+
+cbps.data <- cbps.data %>% mutate(urvoteshare.p2 = ifelse(year.x == 2007, ur.voteshare.2007, ifelse(
+  year.x == 2008, ur.voteshare.2008, ifelse(
+    year.x == 2011, ur.voteshare.2011, ur.voteshare.2012
+  )
+)))
+```
+
+
+##Hypothesis 1
+Appointed local executives will generate better electoral results for the ruling party than elected mayors
+
+###CBPS
+
+```{r}
+cbpsmodel0708.overall1.base <- lm(ur.voteshare ~ treated.0708  + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.overall1.base)
+```
+
+###DiD
+
+```{r}
+didmodel0308.ur <- lm(ur.voteshare ~ treatment.group.all + factor(year.x) +  treat.posttreat +
+                         ethnic.categorical + urgov  +
+                     
+                     lnAvgSalary + unemployrate  +  education +
+                       margin_pretreat_final + regelect_margin_pretreat_final +
+                         mayor.tenure + poppopprop +
+                          avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final,
+                   data=full.data)
+summary(didmodel0308.ur)
+```
+
+###2WFE
+
+```{r}
+twfe.ur.v1 <- lm(ur.voteshare ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + treat.posttreat, data = full.data)
+summary(twfe.ur.v1)
+```
+
+
+##Hypothesis 2
+Appointed mayors better at delivering manipulation
+
+###CBPS
+
+```{r}
+cbpsmodel0708.tcoef <- lm(turnout.coef ~ treated.0708 + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.tcoef)
+```
+
+```{r}
+cbpsmodel0708.tcoef.time <- lm(turnout.coef ~ years.since.treat + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.tcoef.time)
+```
+
+
+
+
+###DiD
+DiD standard framework is not appropriate, since theory suggests that first there will be a drop after treatment, followed by an increase. That is, simply looking at a treatment*posttreatment variable will combine this negative and positive effect. Third model below captures this. Result is robust to inclusion of lagged manipulation variable.
+
+```{r}
+did.frame <- full.data %>% dplyr::select(turnout.coef, ur.voteshare, turnout.coef.susp, treatment.group.all, year.x, treat.posttreat,
+                                         years.since.treat, ethnic.categorical,
+                                  urgov, lnAvgSalary, unemployrate, education, #margin_pretreat_final,
+                                  mayor.tenure, poppopprop, elected.transition, appointed.transition,
+                                   
+                                  #regelect_margin_pretreat_final, regmarginXmargin_pretreat_final,
+                                  #lag.manipulation,
+                                  city_id)
+did.frame <- na.omit(did.frame)
+did.frame <- did.frame %>% mutate(presidential = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, 1, 0))
+
+didmodel0308.tcoef.v1 <- lm(turnout.coef ~ treatment.group.all + factor(city_id) +  treat.posttreat +
+                         #ethnic.categorical + 
+                           urgov  +
+                     
+                     lnAvgSalary + unemployrate  +  education +
+                       margin_pretreat_final + 
+                         mayor.tenure + poppopprop +
+                          avgsalary.pretreat.avg_final #+ regelect_margin_pretreat_final + regmarginXmargin_pretreat_final,
+                       ,
+                   data=did.frame, x = T)
+summary(didmodel0308.tcoef.v1)
+
+didmodel0308.tcoef.v2 <- lm(turnout.coef ~ treatment.group.all + factor(city_id) +  years.since.treat + 
+                        # ethnic.categorical +
+                          urgov  +
+                     
+                     lnAvgSalary + unemployrate  +  education +
+                       margin_pretreat_final + 
+                         mayor.tenure + poppopprop +
+                          avgsalary.pretreat.avg_final #+ regmarginXmargin_pretreat_final regelect_margin_pretreat_final
+                     ,
+                   data=did.frame, x = T)
+summary(didmodel0308.tcoef.v2)
+
+
+didmodel0308.tcoef.v2.fac <- lm(turnout.coef ~ treatment.group.all + factor(city_id) +  factor(years.since.treat) +
+                         #ethnic.categorical + 
+                           urgov  + presidential +
+                     
+                     lnAvgSalary + unemployrate  +  education +
+                       #margin_pretreat_final +  
+                         mayor.tenure + poppopprop 
+                           #+ lag.manipulation #+ regelect_margin_pretreat_final regmarginXmargin_pretreat_final
+                     ,
+                   data=did.frame, x = T)
+summary(didmodel0308.tcoef.v2.fac)
+
+#coeftest.results.did1 <- coeftest(didmodel0308.tcoef.v1, vcov = vcovCL(didmodel0308.tcoef.v1, type="HC1", cluster = full.data$city_id)) ##vcovCL is for clustered SEs, type is correct for lm models
+#coeftest.results.did1
+
+p1 <- ggplot(full.data, aes(jitter(treat.posttreat), turnout.coef)) +
+  geom_point()
+p1 + geom_smooth(method = "lm", se = T)
+
+p2 <- ggplot(full.data, aes(jitter(years.since.treat), turnout.coef)) +
+  geom_point()
+p2 <- p2 + geom_smooth(method = "lm", se = T) + theme_bw()
+p2
+
+###Looking for quadratic effects; not apparent
+p <- ggplot(did.frame, aes(x = years.since.treat, y = turnout.coef)) + geom_point()
+p
+p + stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1)
+p + stat_smooth(method = "lm", formula = y ~ poly(x, 3), size = 1)
+```
+
+
+Turnout coefs below
+
+Model 2 is mostly robust to including lag.manipulation
+
+```{r}
+twfe.tc.v1 <- lm(turnout.coef ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + treat.posttreat, data = full.data)
+summary(twfe.tc.v1)
+
+twfe.tc.v2.fac <- lm(turnout.coef ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + factor(years.since.treat), data = full.data)
+summary(twfe.tc.v2.fac)
+
+twfe.tc.v2 <- lm(turnout.coef ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + years.since.treat, data = full.data)
+summary(twfe.tc.v2)
+```
+
+##Hypothesis 3
+
+Elected mayors are associated with higher vote-shares for the ruling party, after controlling for evidence of electoral manipulation
+
+```{r}
+cbpsmodel0708.overall2.base <- lm(ur.voteshare ~ treated.0708  + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential + turnout.coef, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.overall2.base)
+
+cbpsmodel0708.overall3.base <- lm(ur.voteshare ~ years.since.treat  + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential + turnout.coef, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.overall3.base)
+```
+
+###DiD
+
+```{r}
+didmodel0308.ur.v1 <- lm(ur.voteshare ~ treatment.group.all + factor(city_id) +  factor(years.since.treat) +
+                         #ethnic.categorical + 
+                           urgov  +
+                     
+                     lnAvgSalary + unemployrate  +  education +
+                       margin_pretreat_final + #regelect_margin_pretreat_final +
+                         mayor.tenure + poppopprop +  
+                           #regmarginXmargin_pretreat_final + 
+                       turnout.coef,
+                   data=did.frame, x = T)
+summary(didmodel0308.ur.v1)
+
+didmodel0308.ur.v2 <- lm(ur.voteshare ~ treatment.group.all + factor(city_id) +  treat.posttreat +
+                         ethnic.categorical + urgov  +
+                     
+                     lnAvgSalary + unemployrate  +  education +
+                       margin_pretreat_final + regelect_margin_pretreat_final +
+                         mayor.tenure + poppopprop +  
+                          avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final + turnout.coef.susp,
+                   data=did.frame, x = T)
+summary(didmodel0308.ur.v2)
+
+didmodel0308.ur.v3 <- lm(ur.voteshare ~ treatment.group.all + factor(city_id) +  years.since.treat +
+                         ethnic.categorical + urgov  +
+                     
+                     lnAvgSalary + unemployrate  +  education +
+                       margin_pretreat_final + regelect_margin_pretreat_final +
+                         mayor.tenure + poppopprop +  
+                          avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final + turnout.coef,
+                    data=did.frame, x = T)
+summary(didmodel0308.ur.v3)
+
+```
+
+###2WFE
+
+```{r}
+twfe.ur.v2 <- lm(ur.voteshare ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + treat.posttreat + turnout.coef.susp, data = full.data)
+summary(twfe.ur.v2)
+
+twfe.ur.v3 <- lm(ur.voteshare ~  factor(city_id) + factor(year.x) +  mayor.tenure + urgov + factor(years.since.treat) + turnout.coef, data = full.data)
+summary(twfe.ur.v3)
+
+```
+
+##Hypothesis 4
+
+Time-varying effects for manipulation
+
+###CBPS
+
+```{r}
+cbpsmodel0708.tc1 <- lm(turnout.coef ~ years.since.treat  + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.tc1)
+
+
+```
+
+###DiD
+
+```{r}
+didmodel0308.tc.v1 <- lm(turnout.coef ~  treatment.group.all + factor(year.x) + years.since.treat  + ethnic.categorical + urgov  +
+                         lnAvgSalary + unemployrate  + 
+                       education +  margin_pretreat_final +
+                       regelect_margin_pretreat_final +  mayor.tenure + poppopprop +
+                          avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final,
+                   data=full.data)
+summary(didmodel0308.tc.v1)
+```
+
+
+###2WFE
+
+
+```{r}
+#full.data <- full.data %>% mutate(treated.dummy0708.p1 = treat.group.0708 * post.treatment.1)
+#full.data <- full.data %>% mutate(treated.dummy0708.p2 = treat.group.0708 * post.treatment.2)
+#full.data <- full.data %>% mutate(treated.dummy1112.p2 = treat.group.1112 * post.treatment.2)
+
+
+twfe.tc.v1 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + mayor.tenure + urgov + factor(years.since.treat), data = full.data)
+summary(twfe.tc.v1)
+```
+
+##Hypothesis 5 (Currently not included)
+
+Time-varying effects for vote-share
+
+
+
+```{r}
+cbpsmodel0708.overall1 <- lm(ur.voteshare ~ years.since.treat  + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.overall1)
+
+cbpsmodel0708.overall2 <- lm(ur.voteshare ~ years.since.treat  + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential + turnout.coef.susp, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.overall2)
+
+cbpsmodel0708.overall3 <- lm(ur.voteshare ~ years.since.treat  + ethnic.categorical
+                   + urgov + margin_pretreat_final +
+                     outcome.mayor.tenure + lnAvgSalary +regelect_margin_pretreat_final  +
+                     unemployrate +  #dem +  
+                     education +
+                     presidential + turnout.coef, 
+                      weights=cbps.out.0708$weights,
+                      data = cbps.out.0708$data)
+summary(cbpsmodel0708.overall3)
+```
+
+
+###DiD
+
+```{r}
+didmodel0308.vs.v1 <- lm(ur.voteshare ~  treatment.group.all + factor(year.x) + years.since.treat + ethnic.categorical + urgov  +
+                         lnAvgSalary + unemployrate  + 
+                       education +  margin_pretreat_final +
+                       regelect_margin_pretreat_final +  mayor.tenure + poppopprop +
+                          avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final,
+                   data=full.data)
+summary(didmodel0308.vs.v1)
+
+didmodel0308.vs.v2 <- lm(ur.voteshare ~  treatment.group.all + factor(year.x) + years.since.treat   + ethnic.categorical + urgov  +
+                         lnAvgSalary + unemployrate  + 
+                       education +  margin_pretreat_final +
+                       regelect_margin_pretreat_final +  mayor.tenure + poppopprop +
+                          avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final + turnout.coef.susp,
+                   data=full.data)
+summary(didmodel0308.vs.v2)
+
+didmodel0308.vs.v3 <- lm(ur.voteshare ~  treatment.group.all + factor(year.x) +years.since.treat  + ethnic.categorical + urgov  +
+                         lnAvgSalary + unemployrate  + 
+                       education +  margin_pretreat_final +
+                       regelect_margin_pretreat_final +  mayor.tenure +
+                          avgsalary.pretreat.avg_final + regmarginXmargin_pretreat_final + turnout.coef,
+                   data=full.data)
+summary(didmodel0308.vs.v3)
+```
+
+###2WFE
+
+
+```{r}
+#full.data <- full.data %>% mutate(treated.dummy0708.p1 = treat.group.0708 * post.treatment.1)
+#full.data <- full.data %>% mutate(treated.dummy0708.p2 = treat.group.0708 * post.treatment.2)
+#full.data <- full.data %>% mutate(treated.dummy1112.p2 = treat.group.1112 * post.treatment.2)
+
+
+twfe.ur.v1 <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + mayor.tenure + urgov + treat.posttreat + turnout.coef, data = full.data)
+summary(twfe.ur.v1)
+
+
+twfe.ur.v2 <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + mayor.tenure + urgov + factor(years.since.treat) + turnout.coef, data = full.data)
+summary(twfe.ur.v2)
+```
+
+
+
+##Tables
+
+Table 1 includes election manipulation as a DV, with two IVs (binary and time), and using DiD
+
+```{r include = FALSE}
+cov1         <- vcovCL(didmodel0308.tcoef.v2.fac, cluster = as.factor(did.frame$city_id), type = "HC1")
+robust_se1    <- sqrt(diag(cov1))
+
+coeftest.results1 <- coeftest(didmodel0308.tcoef.v2.fac, vcov = vcovCL(didmodel0308.tcoef.v2.fac, type="HC1", cluster = as.factor(did.frame$city_id))) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results1
+
+cov2         <- vcovCL(didmodel0308.ur.v1, cluster = as.factor(did.frame$city_id), type = "HC1")
+robust_se2    <- sqrt(diag(cov2))
+
+coeftest.results2 <- coeftest(didmodel0308.ur.v1, vcov = vcovCL(didmodel0308.ur.v1, type="HC1", cluster = as.factor(did.frame$city_id))) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results2
+
+se.list <- list(coeftest.results1[,2], coeftest.results2[,2])
+
+stargazer(didmodel0308.tcoef.v2.fac, didmodel0308.ur.v1, type="html", se = se.list, omit = "city_id", out="table_1.html")
+
+```
+
+Table 2 presents the 2WFE models
+
+```{r}
+stargazer(twfe.tc.v2.fac, twfe.ur.v2, type="html", omit = c("(city_id)", "(year.x)"), out="table_2.html")
+```
+
+Table 3 uses UR voteshare as the DV
+
+```{r}
+coeftest.results3 <- coeftest(didmodel0308.ur.v1, vcov = vcovCL(didmodel0308.ur.v1, type="HC1", cluster = as.factor(did.frame$city_id))) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results3
+
+fe.coefs <- summary(twfe.ur.v1)
+fe.coefs <- fe.coefs$coefficients[,2]
+
+se.list <- list(coeftest.results3[,2], fe.coefs)
+
+stargazer(didmodel0308.ur.v1, twfe.ur.v1, omit= "factor", se = se.list, type = "html", out = "table_3.html")
+```
+
+
+Thoughts here: Emphasize the time dynamic in all parts of theory. Do not use nonstandard coefs; instead, build that part of theory into the overall election manipulation section. Cuts down on conceptual and methodological clutter.
+
+These results show that UR vote-share is higher in more established appointment regimes than in elected systems, and lower than elected regimes in newly created appointment regimes. This effect goes away when controlling for turnout coefficient.
+
+This effect (without controlling for manipulation) appears somewhat contrary to Martinez-Bravo, since it shows less support for the ruling party in the immediate aftermath of appointment. But her situation is reversed, since the appointed leaders were holdovers, and these are new.
+
+It supports the Martinez-Bravo finding by showing that the effect on vote-share goes away when controlling for manipulation.
+
+The main contribution is showing that early in appointment regimes, manipulation suffers compared to elected officials, which also drives vote-share. These losses are made up over time, however, as the appointment regime consolidates.
+
+It also shows a relatively weak (or nonexistent) legitimacy effect for elected mayors in this context (effect on vote-share disappears).
+
+##Robustness checks
+
+Treatment lags (time since as a factor)
+```{r}
+coeftest.results4 <- coeftest(didmodel0308.tcoef.v2.fac, vcov = vcovCL(didmodel0308.tcoef.v2.fac, type="HC1", cluster = as.factor(did.frame$city_id))) ##vcovCL is for clustered SEs, type is correct for lm models
+coeftest.results4
+
+fe.coefs <- summary(twfe.tc.v2.fac)
+fe.coefs <- fe.coefs$coefficients[,2]
+
+se.list <- list(coeftest.results4[,2], fe.coefs)
+
+stargazer(didmodel0308.tcoef.v2.fac, twfe.tc.v2.fac, type="html", se = se.list, omit = c("city_id", "year.x"), out="table_4.html")
+```
+
+
+###Two way fixed effect with event study setup (Sun and Abraham 2020)
+
+```{r}
+full.data <- full.data %>% mutate(cohort.minus6_8 = ifelse(cohort.minus8 == 1 | cohort.minus7 == 1 | cohort.minus6 == 1, 1, 0))
+full.data <- full.data %>% mutate(cohort.minus3_5 = ifelse(cohort.minus5 == 1 | cohort.minus4 == 1 | cohort.minus3 == 1, 1, 0))
+full.data <- full.data %>% mutate(cohort.minus1_2 = ifelse(cohort.minus1 == 1 | cohort.minus2 == 1, 1, 0))
+
+
+full.data <- full.data %>% mutate(cohort.plus6_8 = ifelse(cohort.plus8 == 1 | cohort.plus7 == 1 | cohort.plus6 == 1, 1, 0))
+full.data <- full.data %>% mutate(cohort.plus3_5 = ifelse(cohort.plus5 == 1 | cohort.plus4 == 1 | cohort.plus3 == 1, 1, 0))
+full.data <- full.data %>% mutate(cohort.plus1_2 = ifelse(cohort.plus1 == 1 | cohort.plus2 == 1, 1, 0))
+```
+
+Immediately below we have the standard dynamic treatment model that S and A find to be problematic
+
+Vote-share model. Note I believe that the previous setup above fits their 'static' model
+in which treatment has one stable effect over time.  
+
+```{r}
+twfe.ur.sa <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + `rel.time-4` + `rel.time-3` + 
+                   `rel.time-2` + rel.time0 + rel.time1 + rel.time2 + rel.time3
+                   + urgov + turnout.coef, data = full.data)
+summary(twfe.ur.sa)
+```
+
+```{r}
+twfe.tc.sa <- lm(turnout.coef ~ factor(city_id) + factor(year.x) + `rel.time-4` + `rel.time-3` + 
+                   `rel.time-2` + rel.time0 + rel.time1 + rel.time2 + rel.time3 + urgov, data = full.data)
+summary(twfe.tc.sa)
+```
+
+```{r}
+full.data <- full.data %>%
+  mutate(rel.treat.time2 = rel.treat.time)
+
+full.data <- full.data %>%
+  mutate(value = 1,
+         rel.treat.time2 = paste0("rel.time", rel.treat.time2)) %>%
+  spread(rel.treat.time2, value, fill = 0)
+
+full.data <- full.data %>% mutate(cohort1 = ifelse(treat.cohort == 1, 1, 0))
+full.data <- full.data %>% mutate(cohort2 = ifelse(treat.cohort == 2, 1, 0))
+#full.data <- full.data %>% mutate(cohort3 = ifelse(treat.cohort == 3, 1, 0))
+#full.data <- full.data %>% mutate(cohort4 = ifelse(treat.cohort == 4, 1, 0))
+#full.data <- full.data %>% mutate(cohort5 = ifelse(treat.cohort == 5, 1, 0))
+
+```
+
+Below I am trying to get their interaction weighted model set up, but I am unable to get around the multicollinearity problem. I believe this is because the panel is unbalanced.
+
+The problem seems to come from the cohort variable; it can't be identified even when just one cohort indicator is used. Why? Maybe just start a file from scratch to see if we can sort out a data coding error for Abraham and Sun method.
+
+```{r}
+twfe.ur.sa <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) + cohort1 + cohort2 +
+                   `rel.time-2` + rel.time0 + rel.time1 + 
+                   cohort1*rel.time0 + cohort1*rel.time1 +
+                   cohort2*rel.time0
+                   
+                 , data = full.data)
+summary(twfe.ur.sa)
+```
+
+It may also be that the data is already set up in a way that is correct for excluding the problem of comparing late-treated to already treated (See Goodman-Bacon; Deshpande and Li 2017)
