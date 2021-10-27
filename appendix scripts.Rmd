@@ -14,6 +14,7 @@ library(ipw)
 library(WeightIt)
 library(reshape)
 library(CMAverse)
+library(flextable)
 #full.data <- read.csv("cleaned data full all years_v2.csv")
 
 full.data <- read.csv("coefs with city covariates cleaned.csv")
@@ -134,7 +135,10 @@ full.data <- full.data %>% mutate(appointed.share.lag = ifelse(year.x == 2003, 0
 ```{r}
 full.data.descrip <- full.data %>% dplyr::select(turnout.coef, ur.voteshare, presidential, xconst.lag, putin.app.3mo, urgov,             mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, appointed.share, n.precincts,  appointed.exec, years.under.regime)
 
-modelsummary::datasummary_skim(full.data.descrip %>% dplyr::select(-city_id), output = "appendix_descriptive_stats.html")
+tab <- modelsummary::datasummary_skim(full.data.descrip %>% dplyr::select(-city_id), histogram = F, output = "flextable")
+
+tab
+save_as_html(tab, path = "appendix_descriptive_stats.html")
 ```
 
 
