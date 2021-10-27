@@ -129,6 +129,18 @@ full.data <- full.data %>% mutate(appointed.share.lag = ifelse(year.x == 2003, 0
 ```
 
 
+##Descriptive statistics for OLS models
+
+```{r}
+full.data.descrip <- full.data %>% dplyr::select(turnout.coef, ur.voteshare, presidential, xconst.lag, putin.app.3mo, urgov,             mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, appointed.share, n.precincts,  appointed.exec, years.under.regime)
+
+modelsummary::datasummary_skim(full.data.descrip %>% dplyr::select(-city_id), output = "appendix_descriptive_stats.html")
+```
+
+
+
+
+
 ##IPW 
 
 ```{r}
