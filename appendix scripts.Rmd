@@ -139,6 +139,7 @@ tab <- modelsummary::datasummary_skim(full.data.descrip %>% dplyr::select(-city_
 
 tab
 save_as_html(tab, path = "appendix_descriptive_stats.html")
+save_as_docx(tab, path = "appendix_descriptive_stats.docx")
 ```
 
 
