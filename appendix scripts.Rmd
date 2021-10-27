@@ -11,10 +11,14 @@ library(fastDummies)
 library(geepack)
 library(survey)
 library(ipw)
+library(WeightIt)
 library(reshape)
+library(CMAverse)
 #full.data <- read.csv("cleaned data full all years_v2.csv")
 
 full.data <- read.csv("coefs with city covariates cleaned.csv")
+precincts_total <- read.csv("n_precincts_all.csv")
+
 #absentee <- read.csv("absentee coefficients.csv")
 #absentee <- absentee %>% dplyr::select(pct.absentee, city_id_year)
 #full.data <- merge(full.data, absentee, by = "city_id_year")
@@ -101,10 +105,31 @@ full.data <- full.data %>% mutate(elex.since.treatment = ifelse(is.na(elex.since
 ##Region id as factor
 
 full.data <- full.data %>% mutate(regionid.ch = as.factor(regionid.ch))
+
+##Adding n_precincts
+
+precincts_total <- precincts_total %>% mutate(city_id_year = paste(city_id, year, sep = "_"))
+precincts_total <- precincts_total %>% dplyr::select(-year, -city_id)
+
+full.data <- left_join(full.data, precincts_total, by ="city_id_year")
+
+full.data <- full.data %>% dplyr::rename(n.precincts = n)
+
+##Share of appointed mayors nationwide
+
+full.data <- full.data %>% group_by(year.x) %>% mutate(total.appointed = sum(appointed.exec, na.rm=T))
+full.data <- full.data %>% group_by(year.x) %>% mutate(total.cities = length(unique(city_id)))
+full.data <- full.data %>% mutate(appointed.share = total.appointed/total.cities)
+
+##Lagged share
+
+full.data <- full.data %>% group_by(city_id) %>% mutate(appointed.share.lag = lag(appointed.share))
+full.data <- full.data %>% mutate(appointed.share.lag = ifelse(year.x == 2003, 0, appointed.share.lag))
+
 ```
 
 
-##IPW with prior treated cities in region
+##IPW 
 
 ```{r}
 ##Note: including urvoteshare and/or turnoutcoef worsens balance on those variables, so they are excluded
@@ -151,6 +176,7 @@ data2 <- data2 %>% mutate(tsw = ifelse(iptw > quantile(iptw, probs=.95), quantil
 
 summary(data2$tsw)
 ```
+##Treated cities within regions
 
 ```{r}
 ###########################################################################################
@@ -186,6 +212,13 @@ summary(gee.iptw2)
 sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T)
 
 ```
+
+##Including mayor tenure interaction
+
+```{r}
+
+```
+
 
 ##IPW excluding 2003 and 2004 (treatment not possible)
 
@@ -271,11 +304,13 @@ sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 
 
 ```
 
-CBPS weights using WeightIt
+##CBPS weights using WeightIt
 
 To do this, need to capture the full treatment history. I.e. tx1 = 1 if treated in 2003, tx2 = 1 if treated in 2004
 
 geeglm doesn't work for the CBPS weights, but a basic lm does. Need to make sure that is acceptable.
+
+For now, this is *excluded* from robustness checks. Weights are highly unstable (see summary(W) for each option. Results in high coefficients of variaton and small weighted sample sizes)
 
 ```{r}
 #full.data <- full.data %>% mutate(tx1 = 0)
@@ -286,22 +321,34 @@ full.data <- full.data %>% mutate(tx5 = ifelse(is.na(cancel.year) == T, 0, ifels
 full.data <- full.data %>% mutate(tx6 = ifelse(is.na(cancel.year) == T, 0, ifelse(cancel.year <= 2011, 1, 0)))
 
 
+covariates <- full.data %>% dplyr::select(tx2, tx3, tx4, tx5, tx6, urgov, lnAvgSalary, comp.scale2, known.opp.mayor, margin.most.recent, dem, years.with.elections, turnout.coef, ur.voteshare, presidential, xconst.lag,
+                     putin.app.3mo, mayor.tenure, years.under.appt,  urvoteshare.1lag, turncoef.1lag, cancel.year.mod)
+covariates <- covariates %>% mutate(cancel.year.mod = ifelse(is.na(cancel.year.mod)==T, 0, cancel.year.mod))
+complete.tf <- complete.cases(covariates)
+covariates <- bind_cols(covariates, complete.tf)
+covariates <- covariates %>% dplyr::rename(complete.tf = ...24)
+
+covariates <- covariates %>% filter(complete.tf == T)
 
 ```
 
-
 ```{r}
-W <- weightitMSM(list(tx3 ~ tx2 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
+covariates <- fastDummies::dummy_cols(covariates, select_columns = "cancel.year.mod")
+```
+
+Treatment by period option
+```{r}
+W <- weightitMSM(list(tx3 ~ tx2 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
                       #tx2 ~ tx1 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
                     
-                      tx4 ~ tx3 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
-                      tx5 ~  +  tx3  + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
-                      tx6 ~ tx3 + tx4 + tx5 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections),
+                      tx4 ~ tx3 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                      tx5 ~  tx4 + tx3  + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                      tx6 ~ tx3 + tx4 + tx5 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag),
                  method = "cbps",
-                      data = full.data)
+                      data = covariates)
 weights <- W$weights
-full.data <- bind_cols(full.data, weights)
-full.data <- full.data %>% dplyr::rename(cbps.weights = ...119)
+covariates <- bind_cols(covariates, weights)
+covariates <- covariates %>% dplyr::rename(cbps.weights = ...34)
 
 ```
 
@@ -311,7 +358,7 @@ full.data <- full.data %>% dplyr::rename(cbps.weights = ...119)
 ########################################################################
 cbps.lm1 <- lm(turnout.coef~ tx3 + tx5 + presidential + xconst.lag +
                      putin.app.3mo + mayor.tenure,
-                    data=full.data, 
+                    data=covariates, 
                      weights=cbps.weights)
 summary(cbps.lm1)
 #m1 <- broom::tidy(gee.iptw)
@@ -319,13 +366,10 @@ summary(cbps.lm1)
 #  pixiedust::sprinkle_print_method("html")
 
 
-cbps.lm2 <- geeglm(ur.voteshare~ tx3 + tx5 +  presidential + xconst.lag + 
-                     putin.app.3mo + mayor.tenure + turnout.coef + cluster(city_id),
-                    id=city_id,
-                    data=full.data, 
-                    family=gaussian("identity"), 
-                    corstr="ar1",
-                    weights=cbps.weights)
+cbps.lm2 <- lm(ur.voteshare~ tx3 + tx5 +  presidential + xconst.lag + 
+                     putin.app.3mo + mayor.tenure +  turnout.coef,
+                     data=covariates, 
+                        weights=cbps.weights)
 summary(cbps.lm2)
 
 #m2 <- broom::tidy(gee.iptw2)
@@ -335,4 +379,257 @@ summary(cbps.lm2)
 sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T)
 
 ```
+Treatment by year option. Note this is probably incorrect, since it shows the effect of being in a treatment group, rather than the effect of having received a treatment
 
+```{r}
+W <- weightitMSM(list(cancel.year.mod_2004 ~ urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                      #tx2 ~ tx1 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
+                    
+                      cancel.year.mod_2005 ~ cancel.year.mod_2004 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                      cancel.year.mod_2006 ~ cancel.year.mod_2005 +cancel.year.mod_2004  + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                      cancel.year.mod_2007 ~ cancel.year.mod_2006 + cancel.year.mod_2005 +cancel.year.mod_2004 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                 cancel.year.mod_2009 ~  cancel.year.mod_2007 + cancel.year.mod_2006 + cancel.year.mod_2005 +cancel.year.mod_2004 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                 cancel.year.mod_2010 ~ cancel.year.mod_2009 +  cancel.year.mod_2007 + cancel.year.mod_2006 + cancel.year.mod_2005 +cancel.year.mod_2004 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+                  cancel.year.mod_2011 ~ cancel.year.mod_2010 + cancel.year.mod_2009 +  cancel.year.mod_2007 + cancel.year.mod_2006 + cancel.year.mod_2005 +cancel.year.mod_2004 + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag
+                      ),
+                 method = "cbps",
+                      data = covariates)
+weights <- W$weights
+covariates <- bind_cols(covariates, weights)
+covariates <- covariates %>% dplyr::rename(cbps.weights2 = ...35)
+
+```
+
+```{r}
+
+########################################################################
+cbps.lm1 <- lm(turnout.coef~ cancel.year.mod_2011 + cancel.year.mod_2010 + cancel.year.mod_2009 +  cancel.year.mod_2007 + cancel.year.mod_2006 + cancel.year.mod_2005 +cancel.year.mod_2004 + presidential + xconst.lag +
+                     putin.app.3mo + mayor.tenure,
+                    data=covariates, 
+                     weights=cbps.weights2)
+summary(cbps.lm1)
+#m1 <- broom::tidy(gee.iptw)
+#pixiedust::dust(m1) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+
+cbps.lm2 <- lm(ur.voteshare~ cancel.year.mod_2011 + cancel.year.mod_2010 + cancel.year.mod_2009 +  cancel.year.mod_2007 + cancel.year.mod_2006 + cancel.year.mod_2005 +cancel.year.mod_2004 +  presidential + xconst.lag + 
+                     putin.app.3mo + mayor.tenure + turnout.coef,
+                     data=covariates, 
+                        weights=cbps.weights2)
+summary(cbps.lm2)
+
+#m2 <- broom::tidy(gee.iptw2)
+#pixiedust::dust(m2) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T)
+```
+
+#OLS model interacting with mayor tenure
+Currently not run, since mayor tenure is included as control in main models
+
+Effect of transitions within both regime types
+
+```{r}
+full.data <- full.data %>% mutate(mayor.tenure.sq = mayor.tenure^2)
+
+model.tc.tenure <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec*mayor.tenure + appointed.exec*mayor.tenure.sq, data = full.data)
+
+sjPlot::plot_model(model.tc.tenure, type = "pred", terms = c("mayor.tenure", "mayor.tenure.sq", "appointed.exec"))
+
+model.tc.base <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec + mayor.tenure, data = full.data)
+
+stargazer::stargazer(model.tc.base, model.tc.tenure, type = "text", omit="city_id")
+```
+
+```{r}
+model.ur.tenure <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec*mayor.tenure + appointed.exec*mayor.tenure.sq + turnout.coef, data = full.data)
+
+model.ur.base <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
+                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec + mayor.tenure + turnout.coef, data = full.data)
+
+stargazer::stargazer(model.ur.base, model.ur.tenure, type = "text", omit="city_id")
+
+###All four models for appendix
+
+stargazer::stargazer(model.tc.base, model.tc.tenure, model.ur.base, model.ur.tenure, type = "html", omit="city_id", out = "table_app_mayortenure.html")
+```
+###Plot of turnout coefs for main text
+
+```{r}
+novgorod <- read.csv("VelikijNovgorod2011.csv")
+novgorod <- novgorod %>% mutate(region_name = "Velikij Novgorod")
+volgodonsk <- read.csv("Volgodonsk2011.csv")
+volgodonsk <- volgodonsk %>% mutate(region_name = "Volgodonsk")
+
+
+combined.data <- bind_rows(novgorod, volgodonsk)
+
+ggplot(combined.data, aes(x = turnout, y = ur.abshare)) +
+  geom_point() +
+  facet_wrap(~region_name) +
+  geom_smooth(method = lm, se = FALSE) +
+  xlab("Turnout") + ylab("UR absolute vote-share") +
+  theme_bw()
+```
+
+
+##Looking at turnout coef across city size
+
+```{r}
+p.precincts <- ggplot(full.data, aes(x = n.precincts, y = turnout.coef, color = as.factor(appointed.exec))) +
+  geom_point() + scale_color_grey("Appointed exec.") +
+  geom_abline(slope = -0.00025, intercept = .763) +
+  xlab("Number of precincts") +
+  ylab("Estimated manipulation") +
+  theme_bw()
+```
+
+##Thinking about unmanipulated support
+
+
+###OLS
+
+```{r}
+model.ur2.nofe <- lm(ur.voteshare ~  urgov  + margin.most.recent + n.precincts + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime + turnout.coef +
+                      appointed.exec, data = full.data)
+
+
+new.data <- model.ur2$model
+new.data$turnout.coef <- 0
+
+
+predicted.clean.support <- predict(model.ur2.nofe, newdata = new.data)
+
+new.data2 <- cbind(new.data, predicted.clean.support)
+
+summary(lm(predicted.clean.support ~ n.precincts, data = new.data2))
+
+p.precincts.clean <- ggplot(new.data2, aes(x = n.precincts, y = predicted.clean.support)) +
+  geom_point() + scale_color_grey("Appointed exec.") +
+  geom_abline(intercept = .207, slope = -0.0000413) +
+  xlab("Number of precincts") +
+  ylab("Estimated clean support") +
+  theme_bw()
+
+```
+
+##Thinking about models controlling for error in measurement
+
+```{r}
+model.ur.base <- lm(ur.voteshare ~  presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime + turnout.coef +
+                      appointed.exec, data = full.data, x = T)
+
+model.ur.ethnic <- lm(ur.voteshare ~  presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime + majority.russian.republic + majority.minority.republic + turnout.coef +
+                      appointed.exec, data = full.data, x = T)
+
+overall_sd_tc <- full.data %>% group_by(city_id) %>% summarise(sd_turnout = sd(turnout.coef))
+summary(overall_sd_tc)
+
+parl_sd_tc <- full.data %>% dplyr::filter(presidential == 0) %>% group_by(city_id) %>% summarise(sd_turnout = sd(turnout.coef))
+summary(parl_sd_tc)
+
+pres_sd_tc <- full.data %>% dplyr::filter(presidential == 1) %>% group_by(city_id) %>% summarise(sd_turnout = sd(turnout.coef))
+summary(pres_sd_tc)
+
+set.seed(3972)
+
+model_simex <- simex(model.ur.base, SIMEXvariable = "turnout.coef", measurement.error = .2)
+summary(model_simex)
+print(summary(model_simex))
+plot(model_simex)
+plot(model_simex, show = c(rep(FALSE, 14), TRUE), ylab = c(rep("Blank", 14), "Appointed exec"))
+
+
+model_simex_ethnic <- simex(model.ur.ethnic, SIMEXvariable = "turnout.coef", measurement.error = .2)
+summary(model_simex_ethnic)
+print(summary(model_simex_ethnic))
+plot(model_simex_ethnic)
+plot(model_simex_ethnic, show = c(rep(FALSE, 16), TRUE), ylab = c(rep("Blank", 16), "Appointed exec"))
+
+texreg::htmlreg(list(model_simex, model_simex_ethnic), file = "./Output/simex_table.html")
+```
+## IPW with appointed.share
+
+```{r}
+##Note: including urvoteshare and/or turnoutcoef worsens balance on those variables, so they are excluded
+
+covariates <- full.data %>% dplyr::select(city_id, presidential, xconst.lag, putin.app.3mo, urgov, mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, year.x, treated.mod, turnout.coef, years.under.regime, ur.voteshare , treated.mod.1lag, treated.mod.2lag, treated.mod.3lag, years.with.elections, urvoteshare.1lag, turncoef.1lag, n.precincts, appointed.share.lag, appointed.share)
+                                   
+complete.tf <- complete.cases(covariates)
+covariates <- bind_cols(covariates, complete.tf)
+covariates <- covariates %>% dplyr::rename(complete.tf = ...26)
+
+covariates <- covariates %>% filter(complete.tf == T)
+
+data_long_sort <- covariates %>% dplyr::arrange(city_id, year.x)
+data_long_sort <- data_long_sort %>% dplyr::select(-complete.tf)
+data_long_sort <- data.frame(data_long_sort)
+
+w <- ipwtm(
+  exposure = treated.mod,
+  family = "binomial",
+  link = "logit",
+  numerator = ~ treated.mod.1lag + treated.mod.2lag,
+  denominator = ~ treated.mod.1lag + treated.mod.2lag + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent +  dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag + n.precincts + appointed.share.lag,
+  id = city_id,
+  timevar=year.x,
+  type="first",
+  data = data_long_sort)
+summary(w$ipw.weights)
+```
+
+```{r}
+iptw = w$ipw.weights
+
+
+# Add the iptw variable onto a new dataframe = data2.
+data2 <- cbind(data_long_sort, iptw)
+
+##Truncated weights .95
+
+data2 <- data2 %>% mutate(tsw = ifelse(iptw < quantile(iptw, probs=.05), quantile(iptw, probs=.05), iptw))
+
+data2 <- data2 %>% mutate(tsw = ifelse(iptw > quantile(iptw, probs=.95), quantile(iptw, probs=.95), tsw))
+
+summary(data2$tsw)
+```
+```{r}
+###########################################################################################
+# GEE model #2 - IPTW fitted to MSM with clustered robust SE
+###########################################################################################
+########################################################################
+gee.iptw.tc <- geeglm(turnout.coef~ treated.mod + treated.mod.1lag + treated.mod.2lag + presidential + xconst.lag +
+                     putin.app.3mo + 
+                     mayor.tenure + appointed.share + cluster(city_id),
+                    id=city_id,
+                    data=data2, 
+                    family=gaussian("identity"), 
+                    corstr="ar1", 
+                   weights=tsw)
+summary(gee.iptw.tc)
+#m1 <- broom::tidy(gee.iptw)
+#pixiedust::dust(m1) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+
+gee.iptw2.vs <- geeglm(ur.voteshare~ treated.mod + treated.mod.1lag + treated.mod.2lag +  presidential + xconst.lag +
+                      putin.app.3mo + mayor.tenure + appointed.share  + turnout.coef +  cluster(city_id),
+                    id=city_id,
+                    data=data2, 
+                    family=gaussian("identity"), 
+                    corstr="ar1", 
+                   weights=tsw)
+summary(gee.iptw2.vs)
+
+#m2 <- broom::tidy(gee.iptw2)
+#pixiedust::dust(m2) %>%
+#  pixiedust::sprinkle_print_method("html")
+
+sjPlot::tab_model(gee.iptw.tc, gee.iptw2.vs, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T) #This is the model we want in the paper
+
+```

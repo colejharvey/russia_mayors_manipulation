@@ -11,10 +11,12 @@ library(fastDummies)
 library(geepack)
 library(survey)
 library(ipw)
+library(WeightIt)
 library(reshape)
 #full.data <- read.csv("cleaned data full all years_v2.csv")
 
 full.data <- read.csv("coefs with city covariates cleaned.csv")
+precincts_total <- read.csv("n_precincts_all.csv")
 #absentee <- read.csv("absentee coefficients.csv")
 #absentee <- absentee %>% dplyr::select(pct.absentee, city_id_year)
 #full.data <- merge(full.data, absentee, by = "city_id_year")
@@ -101,6 +103,27 @@ full.data <- full.data %>% mutate(elex.since.treatment = ifelse(is.na(elex.since
 ##Region id as factor
 
 full.data <- full.data %>% mutate(regionid.ch = as.factor(regionid.ch))
+
+##Number of appointed mayors by year and proportion
+
+full.data <- full.data %>% group_by(year.x) %>% mutate(appointed.total = sum(appointed.exec, na.rm = T))
+full.data <- full.data %>% group_by(year.x) %>% mutate(cities.total = length(unique(city_id)))
+full.data <- full.data %>% mutate(appointed.share = (appointed.total / cities.total))
+
+##Adding n_precincts
+
+precincts_total <- precincts_total %>% mutate(city_id_year = paste(city_id, year, sep = "_"))
+precincts_total <- precincts_total %>% dplyr::select(-year, -city_id)
+
+full.data <- left_join(full.data, precincts_total, by ="city_id_year")
+
+full.data <- full.data %>% dplyr::rename(n.precincts = n)
+
+##Share of appointed mayors nationwide
+
+full.data <- full.data %>% group_by(year.x) %>% mutate(total.appointed = sum(appointed.exec, na.rm=T))
+full.data <- full.data %>% group_by(year.x) %>% mutate(total.cities = length(unique(city_id)))
+full.data <- full.data %>% mutate(appointed.share = total.appointed/total.cities)
 ```
 
 Weights
@@ -111,11 +134,11 @@ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov +
 ```{r}
 ##Note: including urvoteshare and/or turnoutcoef worsens balance on those variables, so they are excluded
 
-covariates <- full.data %>% select(city_id, presidential, xconst.lag, putin.app.3mo, urgov, mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, year.x, treated.mod, turnout.coef, years.under.regime, ur.voteshare , treated.mod.1lag, treated.mod.2lag, treated.mod.3lag, years.with.elections, urvoteshare.1lag, turncoef.1lag)
+covariates <- full.data %>% dplyr::select(city_id, presidential, xconst.lag, putin.app.3mo, urgov, mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, year.x, treated.mod, turnout.coef, years.under.regime, ur.voteshare , treated.mod.1lag, treated.mod.2lag, treated.mod.3lag, years.with.elections, urvoteshare.1lag, turncoef.1lag, n.precincts)
                                    
 complete.tf <- complete.cases(covariates)
 covariates <- bind_cols(covariates, complete.tf)
-covariates <- covariates %>% dplyr::rename(complete.tf = ...23)
+covariates <- covariates %>% dplyr::rename(complete.tf = ...24)
 
 covariates <- covariates %>% filter(complete.tf == T)
 
@@ -128,7 +151,7 @@ w <- ipwtm(
   family = "binomial",
   link = "logit",
   numerator = ~ treated.mod.1lag + treated.mod.2lag,
-  denominator = ~ treated.mod.1lag + treated.mod.2lag + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent +  dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag,
+  denominator = ~ treated.mod.1lag + treated.mod.2lag + urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent +  dem  + years.with.elections + urvoteshare.1lag + turncoef.1lag + n.precincts,
   id = city_id,
   timevar=year.x,
   type="first",
@@ -209,7 +232,7 @@ confint.geeglm <- function(object, parm, level = 0.95, ...) {
 # GEE model #1.1 - GEE with cluster robust SE (no IPTW)
 ###########################################################################################
 gee.bias <- geeglm(turnout.coef~ treated.post.treatment +  presidential + xconst.lag +
-                     putin.app.3mo + years.under.regime + cluster(city_id),
+                     putin.app.3mo + years.under.regime +  cluster(city_id),
                     id=city_id,
                     data=data2, 
                     family=gaussian("identity"), 
@@ -224,7 +247,8 @@ confint.geeglm(gee.bias, level=0.95)
 ###########################################################################################
 ########################################################################
 gee.iptw <- geeglm(turnout.coef~ treated.mod + treated.mod.1lag + treated.mod.2lag + presidential + xconst.lag +
-                     putin.app.3mo + mayor.tenure + cluster(city_id),
+                     putin.app.3mo + 
+                     mayor.tenure +   cluster(city_id),
                     id=city_id,
                     data=data2, 
                     family=gaussian("identity"), 
@@ -237,7 +261,7 @@ summary(gee.iptw)
 
 
 gee.iptw2 <- geeglm(ur.voteshare~ treated.mod + treated.mod.1lag + treated.mod.2lag +  presidential + xconst.lag +
-                     putin.app.3mo + mayor.tenure + turnout.coef + cluster(city_id),
+                      putin.app.3mo + mayor.tenure + turnout.coef +  cluster(city_id),
                     id=city_id,
                     data=data2, 
                     family=gaussian("identity"), 
@@ -249,7 +273,7 @@ summary(gee.iptw2)
 #pixiedust::dust(m2) %>%
 #  pixiedust::sprinkle_print_method("html")
 
-sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T)
+sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 3, show.se = T, collapse.se =  T) #This is the model we want in the paper
 
 ```
 
@@ -260,11 +284,11 @@ sjPlot::tab_model(gee.iptw, gee.iptw2, show.ci = F, p.style = "stars", digits = 
 ```{r}
 ##Note: including urvoteshare and/or turnoutcoef worsens balance on those variables, so they are excluded
 
-covariates <- full.data %>% select(city_id, presidential, xconst.lag, putin.app.3mo, urgov, mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, year.x, treated.mod, turnout.coef, years.under.regime, ur.voteshare , treated.mod.1lag, treated.mod.2lag, treated.mod.3lag, years.with.elections)
+covariates <- full.data %>% select(city_id, presidential, xconst.lag, putin.app.3mo, urgov, mayor.tenure, lnAvgSalary, dem, comp.scale2, known.opp.mayor, margin.most.recent, year.x, treated.mod, turnout.coef, years.under.regime, ur.voteshare , treated.mod.1lag, treated.mod.2lag, treated.mod.3lag, years.with.elections, n.precincts, appointed.share)
                                    
 complete.tf <- complete.cases(covariates)
 covariates <- bind_cols(covariates, complete.tf)
-covariates <- covariates %>% dplyr::rename(complete.tf = ...21)
+covariates <- covariates %>% dplyr::rename(complete.tf = ...23)
 
 covariates <- covariates %>% filter(complete.tf == T)
 
@@ -277,7 +301,7 @@ w <- ipwtm(
   family = "binomial",
   link = "logit",
   numerator = ~ treated.mod.1lag + treated.mod.2lag + treated.mod.3lag,
-  denominator = ~ treated.mod.1lag + treated.mod.2lag + treated.mod.3lag +  urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections,
+  denominator = ~ treated.mod.1lag + treated.mod.2lag + treated.mod.3lag +  urgov + lnAvgSalary + comp.scale2 + known.opp.mayor +  margin.most.recent + margin.most.recent + dem  + years.with.elections + n.precincts + appointed.share,
   id = city_id,
   timevar=year.x,
   type="first",
@@ -354,7 +378,7 @@ confint.geeglm <- function(object, parm, level = 0.95, ...) {
 # GEE model #1.1 - GEE with cluster robust SE (no IPTW)
 ###########################################################################################
 gee.bias <- geeglm(turnout.coef~ treated.post.treatment +  presidential + xconst.lag +
-                     putin.app.3mo + years.under.regime + cluster(city_id),
+                     putin.app.3mo + years.under.regime + n.precincts + cluster(city_id),
                     id=city_id,
                     data=data2, 
                     family=gaussian("identity"), 
@@ -369,7 +393,7 @@ confint.geeglm(gee.bias, level=0.95)
 ###########################################################################################
 ########################################################################
 gee.iptw <- geeglm(turnout.coef~ treated.mod + treated.mod.1lag + treated.mod.2lag + treated.mod.3lag + presidential + xconst.lag +
-                     putin.app.3mo + mayor.tenure + cluster(city_id),
+                     putin.app.3mo + mayor.tenure + n.precincts + cluster(city_id),
                     id=city_id,
                     data=data2, 
                     family=gaussian("identity"), 
@@ -382,7 +406,7 @@ pixiedust::dust(m1) %>%
 
 
 gee.iptw2 <- geeglm(ur.voteshare~ treated.mod + treated.mod.1lag + treated.mod.2lag + treated.mod.3lag + presidential + xconst.lag +
-                     putin.app.3mo + mayor.tenure + turnout.coef + cluster(city_id),
+                     putin.app.3mo + mayor.tenure + turnout.coef + n.precincts + cluster(city_id),
                     id=city_id,
                     data=data2, 
                     family=gaussian("identity"), 

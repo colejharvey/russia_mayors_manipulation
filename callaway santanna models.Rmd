@@ -12,7 +12,7 @@ library(sandwich)
 library(ggplot2)
 library(stargazer)
 library(interplot)
-library(eventStudy)
+#library(eventStudy)
 library(data.table)
 library(cobalt) #Balance; very useful package
 library(broom)
@@ -75,6 +75,14 @@ full.data <- dummy_cols(full.data, select_columns = "cancel.period.f")
 
 full.data <- full.data %>% rename(turnout.coef = turnout)
 
+##Mod cancel.year to prevent post-treatment bias for 2008 and 2012
+full.data <- full.data %>% mutate(cancel.year.mod = ifelse(is.na(cancel.year)==T, NA, ifelse(is.na(cancel.year)==F & cancel.year != 2008 & cancel.year != 2012, cancel.year, cancel.year + 1)))
+
+##Known opp mayor
+full.data <- full.data %>% mutate(known.opp.mayor = ifelse(is.na(opp_mayor1) == T, 0, ifelse(opp_mayor1==1, 1,0)))
+
+##Years with eelections
+full.data <- full.data %>% mutate(years.with.elections = ifelse(cancel.year == 0, year.x-1996, ifelse(year.x - cancel.year < 0, year.x - 1996, cancel.year - 1996)))
 ```
 
 
@@ -442,22 +450,23 @@ summary(group_effects)
 
 ##All--overall
 Note: the group-time estimates will work with year.x and cancel.year, but not the other elements.
+
+I think the inability to control for time-variant covariates makes this a not-useful approach.
 ```{r}
-data.complete <- full.data %>%  dplyr::select(turnout.coef, cancel.year, city_id, year.x, 
-                                 dem) %>% filter(city_id != 90)
+data.complete <- full.data %>%  dplyr::select(turnout.coef, cancel.year.mod, city_id, year.x, ethnic.categorical) %>% filter(city_id != 90)
 data.complete <- data.complete[complete.cases(data.complete),]
 
 out <- att_gt(yname = "turnout.coef",
-              gname = "cancel.year",
+              gname = "cancel.year.mod",
               idname = "city_id",
               tname = "year.x",
-              xformla = ~ dem,
+              xformla = ~ as.factor(ethnic.categorical),
               data = data.complete,
-              est_method = "reg",
+              est_method = "dr",
               clustervars = c("city_id"),
               bstrap = T,
               cband = T,
-              anticipation = 1)#,
+              allow_unbalanced_panel = F)#,
               #anticipation = 1)
 summary(out)
 ggdid(out)
