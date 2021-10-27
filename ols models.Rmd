@@ -104,7 +104,7 @@ model.tc.base <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag +
 ##Plot base model
 p.tc.base <- sjPlot::plot_model(model.tc.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
                       "appointed.exec", "years.under.regime")) + ylim(-.45, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
-p.tc.base <- p.tc.base + scale_x_discrete(labels = c("Appointed exec.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+p.tc.base <- p.tc.base + scale_x_discrete(labels = c("Appointed exec.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
 
 ##Plot second model
 p.tc.2 <- sjPlot::plot_model(model.tc2, terms = c("urgov", "margin.most.recent", "n.precincts", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 

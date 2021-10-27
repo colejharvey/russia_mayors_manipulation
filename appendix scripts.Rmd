@@ -143,6 +143,137 @@ save_as_docx(tab, path = "appendix_descriptive_stats.docx")
 ```
 
 
+## OLS models with one treatment period at a time: Turnout coefficient
+
+```{r ols-current}
+model.tc.current <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod, data = full.data)
+summary(model.tc.current)
+
+p.tc.base <- sjPlot::plot_model(model.tc.current, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.base <- p.tc.base + scale_x_discrete(labels = c("Appointed exec. (current)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+```
+
+```{r ols-1lag}
+model.tc.1lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.1lag, data = full.data)
+summary(model.tc.1lag)
+
+p.tc.1lag <- sjPlot::plot_model(model.tc.1lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.1lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.1lag <- p.tc.1lag + scale_x_discrete(labels = c("Appointed exec. (1-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+```{r ols-2lag}
+model.tc.2lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.2lag, data = full.data)
+summary(model.tc.2lag)
+
+p.tc.2lag <- sjPlot::plot_model(model.tc.2lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.2lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.2lag <- p.tc.2lag + scale_x_discrete(labels = c("Appointed exec. (2-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+```{r ols-3lag}
+model.tc.3lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.3lag, data = full.data)
+summary(model.tc.3lag)
+
+p.tc.3lag <- sjPlot::plot_model(model.tc.3lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.3lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.3lag <- p.tc.3lag + scale_x_discrete(labels = c("Appointed exec. (3-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+```{r ols-4lag}
+model.tc.4lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.4lag, data = full.data)
+summary(model.tc.4lag)
+
+p.tc.4lag <- sjPlot::plot_model(model.tc.4lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.4lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.4lag <- p.tc.4lag + scale_x_discrete(labels = c("Appointed exec. (4-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+
+```{r}
+stargazer(model.tc.base, model.tc.1lag, model.tc.2lag, model.tc.3lag, type = "html", digits = 2, omit = "factor", out = "appendix_table_tc_lags.html")
+```
+
+
+
+
+## OLS models with one treatment period at a time: UR voteshare
+
+```{r ols-current}
+model.ur.current <- lm(ur.voteshare ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share +  mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime + turnout.coef +
+                      treated.mod, data = full.data)
+summary(model.ur.current)
+
+p.ur.base <- sjPlot::plot_model(model.ur.current, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                     "years.under.regime", "turnout.coef",  "treated.mod")) +
+  ylim(-1, .5) + labs(title = "United Russia vote-share") + geom_hline(yintercept=0) + theme_bw()
+p.ur.base <- p.ur.base + scale_x_discrete(labels = c("Appointed exec.", "Turnout coef.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Number of precincts", "Mayor's margin of victory", "UR governor", "Putin approval", "Exec. constraints", "Presidential election"))
+
+```
+
+```{r ols-1lag}
+model.tc.1lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.1lag, data = full.data)
+summary(model.tc.1lag)
+
+p.tc.1lag <- sjPlot::plot_model(model.tc.1lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.1lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.1lag <- p.tc.1lag + scale_x_discrete(labels = c("Appointed exec. (1-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+```{r ols-2lag}
+model.tc.2lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.2lag, data = full.data)
+summary(model.tc.2lag)
+
+p.tc.2lag <- sjPlot::plot_model(model.tc.2lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.2lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.2lag <- p.tc.2lag + scale_x_discrete(labels = c("Appointed exec. (2-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+```{r ols-3lag}
+model.tc.3lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.3lag, data = full.data)
+summary(model.tc.3lag)
+
+p.tc.3lag <- sjPlot::plot_model(model.tc.3lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.3lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.3lag <- p.tc.3lag + scale_x_discrete(labels = c("Appointed exec. (3-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+```{r ols-4lag}
+model.tc.4lag <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+                      treated.mod.4lag, data = full.data)
+summary(model.tc.4lag)
+
+p.tc.4lag <- sjPlot::plot_model(model.tc.4lag, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+                   "years.under.regime", "treated.mod.4lag")) + ylim(-.25, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
+p.tc.4lag <- p.tc.4lag + scale_x_discrete(labels = c("Appointed exec. (4-year lag)", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+
+
+```
+
+```{r}
+stargazer(model.tc.base, model.tc.1lag, model.tc.2lag, model.tc.3lag, type = "html", digits = 2, omit = "factor", out = "appendix_table_tc_lags.html")
+```
+
+
+
+
 
 
 
