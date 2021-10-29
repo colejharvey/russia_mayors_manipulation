@@ -1,5 +1,5 @@
 ---
-title: "R Notebook"
+title: "OLS models"
 output: html_notebook
 ---
 
@@ -70,13 +70,27 @@ full.data <- full.data %>% group_by(year.x) %>% mutate(total.appointed = sum(app
 full.data <- full.data %>% group_by(year.x) %>% mutate(total.cities = length(unique(city_id)))
 full.data <- full.data %>% mutate(appointed.share = total.appointed/total.cities)
 
+
+## Creating '.mod' variables, which are lagged one year for presidential election years
+             
+
+full.data <- full.data %>% mutate(urgov.mod = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, lag(urgov, 1), urgov))
+
+full.data <- full.data %>% mutate(mayor.tenure.mod = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, lag(mayor.tenure, 1), mayor.tenure))
+
+full.data <- full.data %>% mutate(lnAvgSalary.mod = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, lag(lnAvgSalary, 1), lnAvgSalary))
+
+full.data <- full.data %>% mutate(dem.mod = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, lag(dem, 1), dem))
+
+full.data <- full.data %>% mutate(comp.scale.mod = ifelse(year.x == 2004 | year.x == 2008 | year.x == 2012, lag(comp.scale2, 1), comp.scale2))
+
 ```
 
 ##Overall manipulation
 
 ```{r}
-model.tc <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                 mayor.tenure +  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + margin.most.recent + appointed.share + n.precincts + appointed.exec*years.under.regime, data = full.data)
+model.tc <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov.mod + 
+                 mayor.tenure.mod +  lnAvgSalary.mod + dem.mod + comp.scale.mod  + known.opp.mayor + margin.most.recent +  n.precincts + appointed.exec*years.under.regime, data = full.data)
 #summary(model.tc)
 #sjPlot::plot_model(model.tc, type = "int", show.data = T, jitter = .25)
 #sjPlot::plot_model(model.tc, type = "pred", terms = c("years.with.elections", "years.under.appt"), show.data = T, jitter = .25)
@@ -89,25 +103,25 @@ p.tc <- sim_slopes(model.tc, pred = appointed.exec, modx = years.under.regime, j
 p.tc.image <- p.tc$jnplot
 p.tc.image + labs(title = NULL) + xlab("Years under regime") + ylab("Slope of 'appointed executive'")
 
-model.tc2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  urgov + margin.most.recent + n.precincts +
-                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 +  known.opp.mayor + years.under.regime +
+model.tc2 <- lm(turnout.coef ~ factor(city_id) + factor(year.x) +  urgov.mod + margin.most.recent + n.precincts +
+                 mayor.tenure.mod +  lnAvgSalary.mod + dem.mod + comp.scale.mod +  known.opp.mayor + years.under.regime +
                  appointed.exec, data = full.data)
 #summary(model.tc2)
 #sjPlot::plot_model(model.tc2, type = "int", show.data = T)
 #sim_slopes(model.tc2, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
 
 
-model.tc.base <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime +
+model.tc.base <- lm(turnout.coef ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov.mod  + margin.most.recent + n.precincts + mayor.tenure.mod +  lnAvgSalary.mod + dem.mod + comp.scale.mod + known.opp.mayor +  years.under.regime +
                       appointed.exec, data = full.data)
 #summary(model.tc.base)
 
 ##Plot base model
-p.tc.base <- sjPlot::plot_model(model.tc.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+p.tc.base <- sjPlot::plot_model(model.tc.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov.mod", "margin.most.recent", "n.precincts", "mayor.tenure.mod",  "lnAvgSalary.mod", "dem.mod", "comp.scale.mod", "known.opp.mayor", 
                       "appointed.exec", "years.under.regime")) + ylim(-.45, 1.65) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
-p.tc.base <- p.tc.base + scale_x_discrete(labels = c("Appointed exec.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Appointed share", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
+p.tc.base <- p.tc.base + scale_x_discrete(labels = c("Appointed exec.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Number of precincts", "Mayor's margin of victory",  "UR governor", "Putin approval", "Exec. constraints", "Presidential election")) 
 
 ##Plot second model
-p.tc.2 <- sjPlot::plot_model(model.tc2, terms = c("urgov", "margin.most.recent", "n.precincts", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+p.tc.2 <- sjPlot::plot_model(model.tc2, terms = c("urgov.mod", "margin.most.recent", "n.precincts", "mayor.tenure.mod",  "lnAvgSalary.mod", "dem.mod", "comp.scale.mod", "known.opp.mayor", 
                       "appointed.exec", "years.under.regime")) + ylim(-.45, .45) + labs(title = "Overall manipulation") + theme_bw() + geom_hline(aes(yintercept = 0))
 p.tc.2 <- p.tc.2 + scale_x_discrete(labels = c("Appointed exec.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Number of precincts", "Mayor's margin of victory", "UR governor")) #Write the coefficient names in backwards order, because the plot is transposed
 ```
@@ -115,63 +129,26 @@ p.tc.2 <- p.tc.2 + scale_x_discrete(labels = c("Appointed exec.", "Years under r
 
 
 
-##Nonstandard coef
-
-```{r}
-model.ns <- lm(nonstandard.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + n.precincts + appointed.share + appointed.exec*years.under.regime, data = full.data %>% filter(nonstandard.coef > -2))
-#summary(model.ns)
-sjPlot::plot_model(model.ns, type = "pred", terms = c("years.under.regime", "appointed.exec"), show.data = T, jitter = .25)
-interactions::interact_plot(model.ns, pred = appointed.exec, modx = years.under.regime, interval = TRUE, modx.values = c(0, 12)) #Interpreting this plot: untreated at 16 years = control, treated at 16 = late treated, otherwise early treatment group untreated and post-treatment
-sim_slopes(model.ns, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE)
-
-
-model.ns2 <- lm(nonstandard.coef ~ city_id_factor + factor(year.x) +  urgov + 
-                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + n.precincts + years.under.appt*years.with.elections, data = full.data %>% filter(nonstandard.coef > -2))
-#summary(model.ns2)
-sim_slopes(model.ns2, pred = years.under.appt, modx = years.with.elections, jnplot = TRUE)
-
-
-model.ns.base <- lm(nonstandard.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor + n.precincts + appointed.share + years.under.appt + margin.most.recent + years.with.elections, data = full.data %>% filter(nonstandard.coef > -2))
-
-p.ns.base <- sjPlot::plot_model(model.ns.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov",  "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", "n.precincts", "appointed.share",
-                      "years.under.appt", "margin.most.recent", "years.with.elections")) + ylim(-2.5, .75)
-p.ns.base
-```
 
 ##UR voteshare
 
 
 ```{r}
-model.ur <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + margin.most.recent + 
-                 mayor.tenure +  lnAvgSalary + dem + majority.russian.republic + majority.minority.republic + n.precincts + appointed.share + known.opp.mayor + turnout.coef + appointed.exec*years.under.regime, data = full.data)
-#summary(model.ur)
-sjPlot::plot_model(model.ur, type = "int", show.data = T, jitter = .25)
-sjPlot::plot_model(model.ur, type = "pred", terms = c("years.under.regime", "appointed.exec"), show.data = T, jitter = .25)
 
-interactions::interact_plot(model.ur, pred = appointed.exec, modx = years.under.regime, interval = TRUE, modx.values = c(7, 16)) #Interpreting this plot: untreated at 16 years = control, treated at 16 = late treated, otherwise early treatment group untreated and post-treatment
-interactions::interact_plot(model.ur, pred = years.under.regime, modx = appointed.exec, interval = TRUE)
-
-p.ur <- sim_slopes(model.ur, pred = appointed.exec, modx = years.under.regime, jnplot = TRUE) 
-p.ur.image <- p.ur$jnplot
-p.ur.image + labs(title = NULL) + xlab("Years under regime") + ylab("Slope of 'appointed executive'")
-
-
-model.ur2 <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) +   urgov  + margin.most.recent + n.precincts + mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime + turnout.coef +
+model.ur2 <- lm(ur.voteshare ~ factor(city_id) + factor(year.x) +   urgov.mod  + margin.most.recent + n.precincts + mayor.tenure.mod +  lnAvgSalary.mod + dem.mod + comp.scale.mod + known.opp.mayor +  years.under.regime + turnout.coef +
                       appointed.exec, data = full.data)
 #summary(model.ur2)
 #sjPlot::plot_model(model.ur2, type = "int")
 
-model.ur.base <- lm(ur.voteshare ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov  + margin.most.recent + n.precincts + appointed.share +  mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +  years.under.regime + turnout.coef +
+model.ur.base <- lm(ur.voteshare ~ factor(city_id) + presidential + xconst.lag + putin.app.3mo  +  urgov.mod  + margin.most.recent + n.precincts +   mayor.tenure.mod +  lnAvgSalary.mod + dem.mod + comp.scale.mod + known.opp.mayor +  years.under.regime + turnout.coef +
                       appointed.exec, data = full.data)
 #summary(model.ur.base)
-p.ur.base <- sjPlot::plot_model(model.ur.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov", "margin.most.recent", "n.precincts", "appointed.share", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+p.ur.base <- sjPlot::plot_model(model.ur.base, terms = c("presidential",  "xconst.lag", "putin.app.3mo", "urgov.mod", "margin.most.recent", "n.precincts", "mayor.tenure.mod",  "lnAvgSalary.mod", "dem.mod", "comp.scale.mod", "known.opp.mayor", 
                      "years.under.regime", "turnout.coef",  "appointed.exec")) +
-  ylim(-1, .5) + labs(title = "United Russia vote-share") + geom_hline(yintercept=0) + theme_bw()
+  ylim(-.25, .5) + labs(title = "United Russia vote-share") + geom_hline(yintercept=0) + theme_bw()
 p.ur.base <- p.ur.base + scale_x_discrete(labels = c("Appointed exec.", "Turnout coef.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Number of precincts", "Mayor's margin of victory", "UR governor", "Putin approval", "Exec. constraints", "Presidential election"))
 
-p.ur.2 <- sjPlot::plot_model(model.ur2, terms = c("urgov", "margin.most.recent", "n.precincts", "mayor.tenure",  "lnAvgSalary", "dem", "comp.scale2", "known.opp.mayor", 
+p.ur.2 <- sjPlot::plot_model(model.ur2, terms = c("urgov.mod", "margin.most.recent", "n.precincts", "mayor.tenure.mod",  "lnAvgSalary.mod", "dem.mod", "comp.scale.mod", "known.opp.mayor", 
                       "appointed.exec", "years.under.regime", "turnout.coef")) +
   ylim(-.1, .5) + labs(title = "United Russia vote-share") + geom_hline(yintercept=0) + theme_bw()
 p.ur.2 <- p.ur.2 + scale_x_discrete(labels = c("Appointed exec.", "Turnout coef.", "Years under regime", "Known opposition mayor", "Regional competitivness", "Regional political openness", "Average salary", "Mayor tenure", "Number of precincts", "Mayor's margin of victory", "UR governor"))
@@ -247,23 +224,6 @@ dev.off()
 ```
 
 
-##Absentee
-
-```{r}
-model.abs <- lm(pct.absentee ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                 mayor.tenure +  lnAvgSalary + dem + comp.scale2 + known.opp.mayor +
-                 treated.post.treatment*years.with.elections, data = full.data)
-summary(model.abs)
-sjPlot::plot_model(model.abs, type = "int")
-interactions::interact_plot(model.abs, pred = treated.post.treatment, modx = years.with.elections, interval = TRUE, modx.values = c(7, 16)) #Interpreting this plot: untreated at 16 years = control, treated at 16 = late treated, otherwise early treatment group untreated and post-treatment
-sim_slopes(model.abs, pred = treated.post.treatment, modx = years.with.elections, jnplot = TRUE)
-
-
-
-model.abs2 <- lm(pct.absentee ~ factor(city_id) + factor(year.x) +   urgov + years.since.treatment*appointed.exec + mayor.tenure  + lnAvgSalary + dem + comp.scale2 + turnout.coef, data = full.data)
-summary(model.abs2)
-sjPlot::plot_model(model.abs2, type = "int")
-```
 
 ###Robustness checks
 
