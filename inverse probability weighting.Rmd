@@ -166,7 +166,7 @@ w <- ipwtm(
   family = "binomial",
   link = "logit",
   numerator = ~ treated.mod.1lag + treated.mod.2lag,
-  denominator = ~ treated.mod.1lag + treated.mod.2lag + urgov.mod + lnAvgSalary.mod + comp.scale.mod + known.opp.mayor +  margin.most.recent +  dem.mod  + years.with.elections + appointed.share.mod + urvoteshare.1lag + turncoef.1lag + n.precincts,
+  denominator = ~ treated.mod.1lag + treated.mod.2lag + mayor.tenure.mod +  urgov.mod + lnAvgSalary.mod + comp.scale.mod + known.opp.mayor +  margin.most.recent +  dem.mod  + years.with.elections + appointed.share.mod + urvoteshare.1lag + turncoef.1lag + n.precincts,
   id = city_id,
   timevar=year.x,
   type="first",

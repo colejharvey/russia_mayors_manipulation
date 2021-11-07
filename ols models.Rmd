@@ -230,25 +230,24 @@ dev.off()
 Effect of transitions within both regime types
 
 ```{r}
-full.data <- full.data %>% mutate(mayor.tenure.sq = mayor.tenure^2)
+full.data <- full.data %>% mutate(mayor.tenure.sq = mayor.tenure.mod^2)
 
-model.tc.tenure <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec*mayor.tenure + appointed.exec*mayor.tenure.sq, data = full.data)
+model.tc.tenure <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov.mod +  mayor.tenure.mod +  lnAvgSalary.mod + dem.mod + comp.scale.mod  + 
+                  known.opp.mayor + appointed.exec*mayor.tenure.mod + appointed.exec*mayor.tenure.sq, data = full.data)
 
-sjPlot::plot_model(model.tc.tenure, type = "pred", terms = c("mayor.tenure", "mayor.tenure.sq", "appointed.exec"))
+sjPlot::plot_model(model.tc.tenure, type = "pred", terms = c("mayor.tenure.mod", "mayor.tenure.sq", "appointed.exec"))
 
-model.tc.base <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec + mayor.tenure, data = full.data)
+model.tc.base <- lm(turnout.coef ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov.mod + 
+                  lnAvgSalary.mod + dem.mod + comp.scale.mod  + known.opp.mayor + appointed.exec + mayor.tenure.mod, data = full.data)
 
 stargazer::stargazer(model.tc.base, model.tc.tenure, type = "text", omit="city_id")
 ```
 
 ```{r}
-model.ur.tenure <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec*mayor.tenure + appointed.exec*mayor.tenure.sq + turnout.coef, data = full.data)
+model.ur.tenure <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov.mod +  mayor.tenure.mod +  lnAvgSalary.mod + dem.mod + comp.scale.mod  + known.opp.mayor + appointed.exec*mayor.tenure.mod + appointed.exec*mayor.tenure.sq + turnout.coef, data = full.data)
 
-model.ur.base <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov + 
-                  lnAvgSalary + dem + comp.scale2  + known.opp.mayor + appointed.exec + mayor.tenure + turnout.coef, data = full.data)
+model.ur.base <- lm(ur.voteshare ~ city_id_factor + presidential + xconst.lag + putin.app.3mo +  urgov.mod + 
+                  lnAvgSalary.mod + dem.mod + comp.scale.mod  + known.opp.mayor + appointed.exec + mayor.tenure.mod + turnout.coef, data = full.data)
 
 stargazer::stargazer(model.ur.base, model.ur.tenure, type = "text", omit="city_id")
 
